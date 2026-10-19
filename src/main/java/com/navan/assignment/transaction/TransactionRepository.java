@@ -47,6 +47,28 @@ public class TransactionRepository {
                 .execute();
     }
 
+    public void updateHeader(Transaction transaction) {
+        dsl.update(TRANSACTIONS)
+                .set(TRANSACTIONS.EXTERNAL_ID, transaction.externalId())
+                .set(TRANSACTIONS.TYPE, transaction.type().wire())
+                .set(TRANSACTIONS.CURRENCY, transaction.currency())
+                .set(TRANSACTIONS.OCCURRED_AT, transaction.occurredAt().toString())
+                .set(TRANSACTIONS.TOTAL, transaction.total().toPlainString())
+                .set(TRANSACTIONS.METADATA, writeJson(transaction.metadata()))
+                .set(TRANSACTIONS.UPDATED_AT, transaction.updatedAt().toString())
+                .where(TRANSACTIONS.ID.eq(transaction.id()))
+                .execute();
+    }
+
+    public void deleteLines(UUID transactionId) {
+        dsl.deleteFrom(TAX_LINES).where(TAX_LINES.TRANSACTION_ID.eq(transactionId)).execute();
+        dsl.deleteFrom(FEE_LINES).where(FEE_LINES.TRANSACTION_ID.eq(transactionId)).execute();
+    }
+
+    public int deleteById(UUID id) {
+        return dsl.deleteFrom(TRANSACTIONS).where(TRANSACTIONS.ID.eq(id)).execute();
+    }
+
     public void insertLines(Transaction transaction) {
         for (TaxLine taxLine : transaction.taxLines()) {
             dsl.insertInto(TAX_LINES)

@@ -260,6 +260,162 @@ class TransactionControllerIntegrationTests {
     }
 
     @Nested
+    class UpdateTransaction {
+
+        @Test
+        void patchReplacesHeaderAndLinesAtomically() throws Exception {
+            JsonNode seeds = mapper.readTree(
+                    getClass().getResourceAsStream("/fixtures/seed-payloads.json"));
+            String flight = mapper.writeValueAsString(seeds.get("flight"));
+            MvcResult created = mvc.perform(post("/transactions")
+                            .contentType(MediaType.APPLICATION_JSON).content(flight))
+                    .andExpect(status().isCreated())
+                    .andReturn();
+            String id = mapper.readTree(created.getResponse().getContentAsString())
+                    .get("id").asText();
+            String originalExternalId = seeds.get("flight").get("external_id").asText();
+
+            String patch = """
+                {"type":"flight","currency":"USD",
+                 "occurred_at":"2026-04-01T10:00:00Z","total":333.33,
+                 "metadata":{"origin":"TXL","destination":"CDG"},
+                 "tax_lines":[{"name":"VAT","rate":0.1,"amount":30.30}],
+                 "fee_lines":[{"name":"booking","amount":5.00}]}
+                """;
+
+            mvc.perform(patch("/transactions/{id}", id)
+                            .contentType(MediaType.APPLICATION_JSON).content(patch))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.id").value(id))
+                    .andExpect(jsonPath("$.external_id").value(originalExternalId))
+                    .andExpect(jsonPath("$.currency").value("USD"))
+                    .andExpect(jsonPath("$.total").value(333.33))
+                    .andExpect(jsonPath("$.metadata.destination").value("CDG"))
+                    .andExpect(jsonPath("$.tax_lines", hasSize(1)))
+                    .andExpect(jsonPath("$.tax_lines[0].name").value("VAT"))
+                    .andExpect(jsonPath("$.fee_lines", hasSize(1)))
+                    .andExpect(jsonPath("$.fee_lines[0].name").value("booking"));
+
+            mvc.perform(get("/transactions/{id}", id))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.currency").value("USD"))
+                    .andExpect(jsonPath("$.tax_lines", hasSize(1)))
+                    .andExpect(jsonPath("$.tax_lines[0].name").value("VAT"))
+                    .andExpect(jsonPath("$.fee_lines", hasSize(1)));
+
+            int taxRows = dsl.fetchCount(DSL.table("tax_lines"));
+            int feeRows = dsl.fetchCount(DSL.table("fee_lines"));
+            assertEquals(1, taxRows);
+            assertEquals(1, feeRows);
+        }
+
+        @Test
+        void patchWithEmptyLinesClearsThem() throws Exception {
+            JsonNode seeds = mapper.readTree(
+                    getClass().getResourceAsStream("/fixtures/seed-payloads.json"));
+            String flight = mapper.writeValueAsString(seeds.get("flight"));
+            MvcResult created = mvc.perform(post("/transactions")
+                            .contentType(MediaType.APPLICATION_JSON).content(flight))
+                    .andExpect(status().isCreated())
+                    .andReturn();
+            String id = mapper.readTree(created.getResponse().getContentAsString())
+                    .get("id").asText();
+
+            String patch = """
+                {"type":"flight","currency":"EUR",
+                 "occurred_at":"2026-03-11T06:40:00Z","total":220.00,
+                 "metadata":{"origin":"TXL","destination":"LHR"},
+                 "tax_lines":[],"fee_lines":[]}
+                """;
+            mvc.perform(patch("/transactions/{id}", id)
+                            .contentType(MediaType.APPLICATION_JSON).content(patch))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.tax_lines", hasSize(0)))
+                    .andExpect(jsonPath("$.fee_lines", hasSize(0)));
+
+            assertEquals(0, dsl.fetchCount(DSL.table("tax_lines")));
+            assertEquals(0, dsl.fetchCount(DSL.table("fee_lines")));
+        }
+
+        @Test
+        void patchUnknownIdReturns404() throws Exception {
+            String patch = """
+                {"type":"flight","currency":"EUR",
+                 "occurred_at":"2026-03-11T06:40:00Z","total":10,
+                 "metadata":{"origin":"A","destination":"B"},
+                 "tax_lines":[],"fee_lines":[]}
+                """;
+            mvc.perform(patch("/transactions/{id}", UUID.randomUUID())
+                            .contentType(MediaType.APPLICATION_JSON).content(patch))
+                    .andExpect(status().isNotFound());
+        }
+
+        @Test
+        void patchWithBadMetadataReturns400AndLeavesRowUnchanged() throws Exception {
+            JsonNode seeds = mapper.readTree(
+                    getClass().getResourceAsStream("/fixtures/seed-payloads.json"));
+            String flight = mapper.writeValueAsString(seeds.get("flight"));
+            MvcResult created = mvc.perform(post("/transactions")
+                            .contentType(MediaType.APPLICATION_JSON).content(flight))
+                    .andExpect(status().isCreated())
+                    .andReturn();
+            String id = mapper.readTree(created.getResponse().getContentAsString())
+                    .get("id").asText();
+
+            String bad = """
+                {"type":"navan_fee","currency":"EUR",
+                 "occurred_at":"2026-03-11T06:40:00Z","total":10,
+                 "metadata":{"fee_kind":"nope"},
+                 "tax_lines":[],"fee_lines":[]}
+                """;
+            mvc.perform(patch("/transactions/{id}", id)
+                            .contentType(MediaType.APPLICATION_JSON).content(bad))
+                    .andExpect(status().isBadRequest());
+
+            mvc.perform(get("/transactions/{id}", id))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.currency").value("EUR"))
+                    .andExpect(jsonPath("$.type").value("flight"));
+        }
+    }
+
+    @Nested
+    class DeleteTransaction {
+
+        @Test
+        void deleteRemovesTransactionAndCascadesLines() throws Exception {
+            JsonNode seeds = mapper.readTree(
+                    getClass().getResourceAsStream("/fixtures/seed-payloads.json"));
+            String flight = mapper.writeValueAsString(seeds.get("flight"));
+            MvcResult created = mvc.perform(post("/transactions")
+                            .contentType(MediaType.APPLICATION_JSON).content(flight))
+                    .andExpect(status().isCreated())
+                    .andReturn();
+            String id = mapper.readTree(created.getResponse().getContentAsString())
+                    .get("id").asText();
+
+            assertTrue(dsl.fetchCount(DSL.table("tax_lines")) > 0
+                    || dsl.fetchCount(DSL.table("fee_lines")) > 0);
+
+            mvc.perform(delete("/transactions/{id}", id))
+                    .andExpect(status().isNoContent());
+
+            mvc.perform(get("/transactions/{id}", id))
+                    .andExpect(status().isNotFound());
+
+            assertEquals(0, dsl.fetchCount(DSL.table("transactions")));
+            assertEquals(0, dsl.fetchCount(DSL.table("tax_lines")));
+            assertEquals(0, dsl.fetchCount(DSL.table("fee_lines")));
+        }
+
+        @Test
+        void deleteUnknownIdReturns404() throws Exception {
+            mvc.perform(delete("/transactions/{id}", UUID.randomUUID()))
+                    .andExpect(status().isNotFound());
+        }
+    }
+
+    @Nested
     class Validation {
 
         @Test

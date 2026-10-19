@@ -72,6 +72,50 @@ public class TransactionService {
                 .orElseThrow(() -> new NotFoundException("transaction not found: " + id));
     }
 
+    @Transactional
+    public Transaction update(
+            UUID id,
+            TransactionType type,
+            String currency,
+            Instant occurredAt,
+            BigDecimal total,
+            JsonNode metadata,
+            List<TaxLine> taxLines,
+            List<FeeLine> feeLines) {
+
+        metadataValidator.validate(type, metadata);
+
+        Transaction existing = transactionRepository.findById(id)
+                .orElseThrow(() -> new NotFoundException("transaction not found: " + id));
+
+        Transaction updated = new Transaction(
+                existing.id(),
+                existing.externalId(),
+                type,
+                currency,
+                occurredAt,
+                total,
+                metadata,
+                taxLines == null ? List.of() : taxLines,
+                feeLines == null ? List.of() : feeLines,
+                existing.createdAt(),
+                Instant.now()
+        );
+
+        transactionRepository.updateHeader(updated);
+        transactionRepository.deleteLines(existing.id());
+        transactionRepository.insertLines(updated);
+        return updated;
+    }
+
+    @Transactional
+    public void delete(UUID id) {
+        int deleted = transactionRepository.deleteById(id);
+        if (deleted == 0) {
+            throw new NotFoundException("transaction not found: " + id);
+        }
+    }
+
     public TransactionPage findPage(int limit, int offset) {
         if (limit < 1) throw new BadRequestException("limit must be >= 1");
         if (limit > 100) throw new BadRequestException("limit must be <= 100");

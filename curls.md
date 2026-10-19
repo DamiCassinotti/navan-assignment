@@ -79,6 +79,50 @@ curl -s localhost:8080/transactions/$ID | jq
 curl -i localhost:8080/transactions/00000000-0000-0000-0000-000000000000
 ```
 
+## `PATCH /transactions/{id}`
+
+Atomic replace of the header fields plus tax/fee lines. `external_id` is immutable.
+
+```bash
+# Happy path — 200 with the updated body
+ID=$(curl -s -X POST localhost:8080/transactions -H 'content-type: application/json' \
+       -d "$(jq '.flight' fixtures/task-b/seed-payloads.json)" | jq -r .id)
+
+curl -i -X PATCH localhost:8080/transactions/$ID \
+  -H 'content-type: application/json' \
+  -d '{
+    "type":"flight","currency":"USD",
+    "occurred_at":"2026-04-01T10:00:00Z","total":333.33,
+    "metadata":{"origin":"TXL","destination":"CDG"},
+    "tax_lines":[{"name":"VAT","rate":0.1,"amount":30.30}],
+    "fee_lines":[{"name":"booking","amount":5.00}]
+  }'
+
+# Unknown id — 404
+curl -i -X PATCH localhost:8080/transactions/00000000-0000-0000-0000-000000000000 \
+  -H 'content-type: application/json' \
+  -d '{"type":"flight","currency":"EUR","occurred_at":"2026-03-11T06:40:00Z","total":10,"metadata":{"origin":"A","destination":"B"},"tax_lines":[],"fee_lines":[]}'
+
+# Bad metadata — 400, row unchanged
+curl -i -X PATCH localhost:8080/transactions/$ID \
+  -H 'content-type: application/json' \
+  -d '{"type":"navan_fee","currency":"EUR","occurred_at":"2026-03-11T06:40:00Z","total":10,"metadata":{"fee_kind":"nope"},"tax_lines":[],"fee_lines":[]}'
+```
+
+## `DELETE /transactions/{id}`
+
+Cascades to tax/fee lines.
+
+```bash
+# Happy path — 204
+ID=$(curl -s -X POST localhost:8080/transactions -H 'content-type: application/json' \
+       -d "$(jq '.hotel' fixtures/task-b/seed-payloads.json)" | jq -r .id)
+curl -i -X DELETE localhost:8080/transactions/$ID
+
+# Unknown id — 404
+curl -i -X DELETE localhost:8080/transactions/00000000-0000-0000-0000-000000000000
+```
+
 ## `GET /transactions`
 
 ```bash

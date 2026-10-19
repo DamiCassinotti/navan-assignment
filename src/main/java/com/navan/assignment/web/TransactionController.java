@@ -11,6 +11,7 @@ import com.navan.assignment.web.dto.FeeLineDto;
 import com.navan.assignment.web.dto.TaxLineDto;
 import com.navan.assignment.web.dto.TransactionPageResponse;
 import com.navan.assignment.web.dto.TransactionResponse;
+import com.navan.assignment.web.dto.UpdateTransactionRequest;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
@@ -52,6 +53,27 @@ public class TransactionController {
         return TransactionResponse.from(transactionService.findById(id));
     }
 
+    @PatchMapping("/{id}")
+    public TransactionResponse update(@PathVariable UUID id, @RequestBody UpdateTransactionRequest request) {
+        requireUpdateFields(request);
+        return TransactionResponse.from(transactionService.update(
+                id,
+                request.type(),
+                request.currency(),
+                request.occurredAt(),
+                request.total(),
+                request.metadata(),
+                mapTaxes(request.taxLines()),
+                mapFees(request.feeLines())
+        ));
+    }
+
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Void> delete(@PathVariable UUID id) {
+        transactionService.delete(id);
+        return ResponseEntity.noContent().build();
+    }
+
     @GetMapping
     public TransactionPageResponse list(
             @RequestParam(defaultValue = "50") int limit,
@@ -67,6 +89,15 @@ public class TransactionController {
         if (request == null) throw new BadRequestException("body required");
         if (!StringUtils.hasText(request.externalId()))
             throw new BadRequestException("external_id required");
+        if (request.type() == null) throw new BadRequestException("type required");
+        if (!StringUtils.hasText(request.currency()))
+            throw new BadRequestException("currency required");
+        if (request.occurredAt() == null) throw new BadRequestException("occurred_at required");
+        if (request.total() == null) throw new BadRequestException("total required");
+    }
+
+    private static void requireUpdateFields(UpdateTransactionRequest request) {
+        if (request == null) throw new BadRequestException("body required");
         if (request.type() == null) throw new BadRequestException("type required");
         if (!StringUtils.hasText(request.currency()))
             throw new BadRequestException("currency required");
