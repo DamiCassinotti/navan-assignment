@@ -47,7 +47,59 @@ public class InvoiceRepository {
                 .set(INVOICES.FEE_ROLLUP, writeJson(invoice.feeRollup()))
                 .set(INVOICES.CREATED_AT, invoice.createdAt().toString())
                 .execute();
+        insertLines(invoice);
+    }
 
+    public List<Invoice> findAll(int limit, int offset) {
+        List<Invoice> result = new ArrayList<>();
+        dsl.selectFrom(INVOICES)
+                .orderBy(INVOICES.CREATED_AT.asc(), INVOICES.ID.asc())
+                .limit(limit)
+                .offset(offset)
+                .fetch()
+                .forEach(row -> {
+                    UUID id = row.get(INVOICES.ID);
+                    List<InvoiceLine> lines = new ArrayList<>();
+                    dsl.selectFrom(INVOICE_LINES)
+                            .where(INVOICE_LINES.INVOICE_ID.eq(id))
+                            .fetch()
+                            .forEach(lineRow -> lines.add(hydrateLine(lineRow)));
+                    result.add(new Invoice(
+                            id,
+                            row.get(INVOICES.CURRENCY),
+                            new BigDecimal(row.get(INVOICES.GRAND_TOTAL)),
+                            readRollup(row.get(INVOICES.TAX_ROLLUP)),
+                            readRollup(row.get(INVOICES.FEE_ROLLUP)),
+                            lines,
+                            Instant.parse(row.get(INVOICES.CREATED_AT))
+                    ));
+                });
+        return result;
+    }
+
+    public void deleteSnapshotRows(UUID invoiceId) {
+        List<UUID> lineIds = dsl.select(INVOICE_LINES.ID)
+                .from(INVOICE_LINES)
+                .where(INVOICE_LINES.INVOICE_ID.eq(invoiceId))
+                .fetch(INVOICE_LINES.ID);
+        if (!lineIds.isEmpty()) {
+            dsl.deleteFrom(INVOICE_TAX_LINES).where(INVOICE_TAX_LINES.INVOICE_LINE_ID.in(lineIds)).execute();
+            dsl.deleteFrom(INVOICE_FEE_LINES).where(INVOICE_FEE_LINES.INVOICE_LINE_ID.in(lineIds)).execute();
+        }
+        dsl.deleteFrom(INVOICE_LINES).where(INVOICE_LINES.INVOICE_ID.eq(invoiceId)).execute();
+    }
+
+    public void updateHeader(Invoice invoice) {
+        dsl.update(INVOICES)
+                .set(INVOICES.CURRENCY, invoice.currency())
+                .set(INVOICES.GRAND_TOTAL, invoice.grandTotal().toPlainString())
+                .set(INVOICES.TAX_ROLLUP, writeJson(invoice.taxRollup()))
+                .set(INVOICES.FEE_ROLLUP, writeJson(invoice.feeRollup()))
+                .where(INVOICES.ID.eq(invoice.id()))
+                .execute();
+    }
+
+    public void insertLines(Invoice invoice) {
         for (InvoiceLine line : invoice.lines()) {
             dsl.insertInto(INVOICE_LINES)
                     .set(INVOICE_LINES.ID, line.id())
@@ -80,31 +132,17 @@ public class InvoiceRepository {
         }
     }
 
-    public List<Invoice> findAll(int limit, int offset) {
-        List<Invoice> result = new ArrayList<>();
-        dsl.selectFrom(INVOICES)
-                .orderBy(INVOICES.CREATED_AT.asc(), INVOICES.ID.asc())
-                .limit(limit)
-                .offset(offset)
-                .fetch()
-                .forEach(row -> {
-                    UUID id = row.get(INVOICES.ID);
-                    List<InvoiceLine> lines = new ArrayList<>();
-                    dsl.selectFrom(INVOICE_LINES)
-                            .where(INVOICE_LINES.INVOICE_ID.eq(id))
-                            .fetch()
-                            .forEach(lineRow -> lines.add(hydrateLine(lineRow)));
-                    result.add(new Invoice(
-                            id,
-                            row.get(INVOICES.CURRENCY),
-                            new BigDecimal(row.get(INVOICES.GRAND_TOTAL)),
-                            readRollup(row.get(INVOICES.TAX_ROLLUP)),
-                            readRollup(row.get(INVOICES.FEE_ROLLUP)),
-                            lines,
-                            Instant.parse(row.get(INVOICES.CREATED_AT))
-                    ));
-                });
-        return result;
+    public int deleteById(UUID invoiceId) {
+        deleteSnapshotRows(invoiceId);
+        return dsl.deleteFrom(INVOICES).where(INVOICES.ID.eq(invoiceId)).execute();
+    }
+
+    public Optional<UUID> findInvoiceIdForTransaction(UUID transactionId) {
+        return dsl.select(INVOICE_LINES.INVOICE_ID)
+                .from(INVOICE_LINES)
+                .where(INVOICE_LINES.TRANSACTION_ID.eq(transactionId))
+                .limit(1)
+                .fetchOptional(INVOICE_LINES.INVOICE_ID);
     }
 
     public Optional<Invoice> findById(UUID id) {

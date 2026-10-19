@@ -39,6 +39,32 @@ public class InvoiceService {
 
     @Transactional
     public Invoice create(List<UUID> requestedIds) {
+        UUID id = UUID.randomUUID();
+        Invoice invoice = buildSnapshot(id, requestedIds, Instant.now());
+        invoiceRepository.insert(invoice);
+        return invoice;
+    }
+
+    @Transactional
+    public Invoice update(UUID id, List<UUID> requestedIds) {
+        Invoice existing = invoiceRepository.findById(id)
+                .orElseThrow(() -> new NotFoundException("invoice not found: " + id));
+        Invoice rebuilt = buildSnapshot(id, requestedIds, existing.createdAt());
+        invoiceRepository.deleteSnapshotRows(id);
+        invoiceRepository.updateHeader(rebuilt);
+        invoiceRepository.insertLines(rebuilt);
+        return rebuilt;
+    }
+
+    @Transactional
+    public void delete(UUID id) {
+        int deleted = invoiceRepository.deleteById(id);
+        if (deleted == 0) {
+            throw new NotFoundException("invoice not found: " + id);
+        }
+    }
+
+    private Invoice buildSnapshot(UUID invoiceId, List<UUID> requestedIds, Instant createdAt) {
         if (requestedIds == null || requestedIds.isEmpty()) {
             throw new BadRequestException("at least one transaction_id required");
         }
@@ -90,21 +116,15 @@ public class InvoiceService {
             grandTotal = grandTotal.add(tx.total());
         }
 
-        List<RollupEntry> taxRollup = buildTaxRollup(transactions);
-        List<RollupEntry> feeRollup = buildFeeRollup(transactions);
-
-        Invoice invoice = new Invoice(
-                UUID.randomUUID(),
+        return new Invoice(
+                invoiceId,
                 currency,
                 grandTotal,
-                taxRollup,
-                feeRollup,
+                buildTaxRollup(transactions),
+                buildFeeRollup(transactions),
                 lines,
-                Instant.now()
+                createdAt
         );
-
-        invoiceRepository.insert(invoice);
-        return invoice;
     }
 
     public InvoicePage findPage(int limit, int offset) {

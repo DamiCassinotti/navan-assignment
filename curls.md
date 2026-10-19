@@ -206,3 +206,48 @@ curl -s "localhost:8080/invoices?limit=2&offset=2" | jq
 # limit > 100 — 400
 curl -i "localhost:8080/invoices?limit=101"
 ```
+
+## `PATCH /invoices/{id}`
+
+Same body shape as `POST /invoices`. Re-snapshots atomically: old snapshot rows are dropped, new ones inserted, rollups recomputed. `created_at` is preserved.
+
+```bash
+# Swap the tx set behind an existing invoice
+curl -i -X PATCH localhost:8080/invoices/$INVOICE_ID \
+  -H 'content-type: application/json' \
+  -d "{\"transaction_ids\":[\"$HOTEL\",\"$RAIL\"]}"
+
+# Unknown invoice — 404
+curl -i -X PATCH localhost:8080/invoices/00000000-0000-0000-0000-000000000000 \
+  -H 'content-type: application/json' \
+  -d "{\"transaction_id\":\"$FLIGHT\"}"
+
+# Mixed currencies — 409 (invoice unchanged)
+curl -i -X PATCH localhost:8080/invoices/$INVOICE_ID \
+  -H 'content-type: application/json' \
+  -d "{\"transaction_ids\":[\"$FLIGHT\",\"$USD_HOTEL_ID\"]}"
+```
+
+## `DELETE /invoices/{id}`
+
+Removes the invoice row and its snapshot rows (`invoice_lines`, `invoice_tax_lines`, `invoice_fee_lines`). Underlying transactions are left untouched.
+
+```bash
+curl -i -X DELETE localhost:8080/invoices/$INVOICE_ID
+
+# Unknown id — 404
+curl -i -X DELETE localhost:8080/invoices/00000000-0000-0000-0000-000000000000
+```
+
+## Invoiced-transaction guard
+
+Any transaction that currently has a row in `invoice_lines` can't be mutated or removed. `PATCH /transactions/{id}` and `DELETE /transactions/{id}` return **409** without writing.
+
+```bash
+# After POST /invoices with $FLIGHT, both of these are rejected:
+curl -i -X PATCH localhost:8080/transactions/$FLIGHT \
+  -H 'content-type: application/json' \
+  -d '{"type":"flight","currency":"EUR","occurred_at":"2026-03-11T06:40:00Z","total":999.99,"metadata":{"origin":"TXL","destination":"LHR"},"tax_lines":[],"fee_lines":[]}'
+
+curl -i -X DELETE localhost:8080/transactions/$FLIGHT
+```

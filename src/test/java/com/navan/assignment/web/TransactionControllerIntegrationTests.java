@@ -62,6 +62,10 @@ class TransactionControllerIntegrationTests {
 
     @BeforeEach
     void clean() {
+        dsl.execute("DELETE FROM invoice_fee_lines");
+        dsl.execute("DELETE FROM invoice_tax_lines");
+        dsl.execute("DELETE FROM invoice_lines");
+        dsl.execute("DELETE FROM invoices");
         dsl.execute("DELETE FROM fee_lines");
         dsl.execute("DELETE FROM tax_lines");
         dsl.execute("DELETE FROM transactions");
@@ -448,6 +452,64 @@ class TransactionControllerIntegrationTests {
         void getUnknownIdReturns404() throws Exception {
             mvc.perform(get("/transactions/{id}", UUID.randomUUID()))
                     .andExpect(status().isNotFound());
+        }
+    }
+
+    @Nested
+    class InvoicedGuard {
+
+        @Test
+        void patchRejectedWhenTransactionIsOnInvoice() throws Exception {
+            String flightId = postSeed("flight");
+            invoiceOn(flightId);
+
+            JsonNode seeds = mapper.readTree(
+                    getClass().getResourceAsStream("/fixtures/seed-payloads.json"));
+            ObjectNode patch = (ObjectNode) seeds.get("flight").deepCopy();
+            patch.put("total", 999.99);
+            patch.remove("external_id");
+
+            mvc.perform(patch("/transactions/{id}", flightId)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(mapper.writeValueAsString(patch)))
+                    .andExpect(status().isConflict());
+
+            mvc.perform(get("/transactions/{id}", flightId))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.total").value(220.0));
+        }
+
+        @Test
+        void deleteRejectedWhenTransactionIsOnInvoice() throws Exception {
+            String flightId = postSeed("flight");
+            invoiceOn(flightId);
+
+            mvc.perform(delete("/transactions/{id}", flightId))
+                    .andExpect(status().isConflict());
+
+            mvc.perform(get("/transactions/{id}", flightId))
+                    .andExpect(status().isOk());
+            assertEquals(1, dsl.fetchCount(DSL.table("transactions")));
+        }
+
+        private String postSeed(String key) throws Exception {
+            JsonNode seeds = mapper.readTree(
+                    getClass().getResourceAsStream("/fixtures/seed-payloads.json"));
+            MvcResult result = mvc.perform(post("/transactions")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(mapper.writeValueAsString(seeds.get(key))))
+                    .andExpect(status().isCreated())
+                    .andReturn();
+            return mapper.readTree(result.getResponse().getContentAsString()).get("id").asText();
+        }
+
+        private void invoiceOn(String transactionId) throws Exception {
+            ObjectNode body = mapper.createObjectNode();
+            body.put("transaction_id", transactionId);
+            mvc.perform(post("/invoices")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(mapper.writeValueAsString(body)))
+                    .andExpect(status().isCreated());
         }
     }
 }

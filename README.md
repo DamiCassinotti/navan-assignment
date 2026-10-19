@@ -25,6 +25,9 @@ Take-home: travel transactions + invoice service. See [`task-b-travel-inventory-
 - `POST /invoices` — snapshot one or more transactions. Accepts `transaction_id` or `transaction_ids`; repeated ids collapse to one line. `404` if any id is missing, `409` on mixed currencies. Returns cached `tax_rollup` / `fee_rollup` / `grand_total`.
 - `GET /invoices/{id}` — fetch the snapshot and cached rollups verbatim (no recomputation), `404` if missing.
 - `GET /invoices` — paginated (`limit` default 50, max 100; `offset` default 0).
+- `PATCH /invoices/{id}` — re-snapshot atomically (same body as `POST`). `404` if missing, `409` on mixed currencies.
+- `DELETE /invoices/{id}` — remove the invoice + snapshot rows; underlying transactions untouched. `404` if missing.
+- `PATCH /transactions/{id}` and `DELETE /transactions/{id}` return `409` while the transaction is on any invoice.
 
 ### curl
 

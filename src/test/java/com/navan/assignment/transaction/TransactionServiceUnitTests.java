@@ -7,7 +7,9 @@ import static org.mockito.Mockito.*;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.navan.assignment.common.errors.BadRequestException;
+import com.navan.assignment.common.errors.ConflictException;
 import com.navan.assignment.common.errors.NotFoundException;
+import com.navan.assignment.invoice.InvoiceRepository;
 import com.navan.assignment.transaction.model.FeeLine;
 import com.navan.assignment.transaction.model.TaxLine;
 import com.navan.assignment.transaction.model.Transaction;
@@ -26,12 +28,14 @@ class TransactionServiceUnitTests {
 
     private final ObjectMapper mapper = new ObjectMapper();
     private TransactionRepository transactionRepository;
+    private InvoiceRepository invoiceRepository;
     private TransactionService service;
 
     @BeforeEach
     void setup() {
         transactionRepository = mock(TransactionRepository.class);
-        service = new TransactionService(transactionRepository, new MetadataValidator());
+        invoiceRepository = mock(InvoiceRepository.class);
+        service = new TransactionService(transactionRepository, invoiceRepository, new MetadataValidator());
     }
 
     @Nested
@@ -157,6 +161,26 @@ class TransactionServiceUnitTests {
                             Instant.now(), new BigDecimal("10"), metadata, List.of(), List.of()));
             verifyNoInteractions(transactionRepository);
         }
+
+        @Test
+        void conflictWhenTransactionIsOnInvoice() throws Exception {
+            UUID id = UUID.randomUUID();
+            Instant now = Instant.now();
+            Transaction existing = new Transaction(
+                    id, "ext-1", TransactionType.FLIGHT, "EUR",
+                    now, new BigDecimal("220.00"), mapper.readTree("{}"),
+                    List.of(), List.of(), now, now);
+            when(transactionRepository.findById(id)).thenReturn(Optional.of(existing));
+            when(invoiceRepository.findInvoiceIdForTransaction(id)).thenReturn(Optional.of(UUID.randomUUID()));
+            JsonNode metadata = mapper.readTree("{\"origin\":\"TXL\",\"destination\":\"LHR\"}");
+
+            assertThrows(ConflictException.class, () ->
+                    service.update(id, TransactionType.FLIGHT, "EUR",
+                            now, new BigDecimal("250"), metadata, List.of(), List.of()));
+            verify(transactionRepository, never()).updateHeader(any());
+            verify(transactionRepository, never()).deleteLines(any());
+            verify(transactionRepository, never()).insertLines(any());
+        }
     }
 
     @Nested
@@ -175,6 +199,14 @@ class TransactionServiceUnitTests {
             UUID id = UUID.randomUUID();
             when(transactionRepository.deleteById(id)).thenReturn(0);
             assertThrows(NotFoundException.class, () -> service.delete(id));
+        }
+
+        @Test
+        void conflictWhenTransactionIsOnInvoice() {
+            UUID id = UUID.randomUUID();
+            when(invoiceRepository.findInvoiceIdForTransaction(id)).thenReturn(Optional.of(UUID.randomUUID()));
+            assertThrows(ConflictException.class, () -> service.delete(id));
+            verify(transactionRepository, never()).deleteById(any());
         }
     }
 }

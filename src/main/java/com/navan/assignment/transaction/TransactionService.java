@@ -2,7 +2,9 @@ package com.navan.assignment.transaction;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.navan.assignment.common.errors.BadRequestException;
+import com.navan.assignment.common.errors.ConflictException;
 import com.navan.assignment.common.errors.NotFoundException;
+import com.navan.assignment.invoice.InvoiceRepository;
 import com.navan.assignment.transaction.model.FeeLine;
 import com.navan.assignment.transaction.model.TaxLine;
 import com.navan.assignment.transaction.model.Transaction;
@@ -21,10 +23,15 @@ import org.springframework.transaction.annotation.Transactional;
 public class TransactionService {
 
     private final TransactionRepository transactionRepository;
+    private final InvoiceRepository invoiceRepository;
     private final MetadataValidator metadataValidator;
 
-    public TransactionService(TransactionRepository transactionRepository, MetadataValidator metadataValidator) {
+    public TransactionService(
+            TransactionRepository transactionRepository,
+            InvoiceRepository invoiceRepository,
+            MetadataValidator metadataValidator) {
         this.transactionRepository = transactionRepository;
+        this.invoiceRepository = invoiceRepository;
         this.metadataValidator = metadataValidator;
     }
 
@@ -88,6 +95,8 @@ public class TransactionService {
         Transaction existing = transactionRepository.findById(id)
                 .orElseThrow(() -> new NotFoundException("transaction not found: " + id));
 
+        requireNotInvoiced(id);
+
         Transaction updated = new Transaction(
                 existing.id(),
                 existing.externalId(),
@@ -110,10 +119,17 @@ public class TransactionService {
 
     @Transactional
     public void delete(UUID id) {
+        requireNotInvoiced(id);
         int deleted = transactionRepository.deleteById(id);
         if (deleted == 0) {
             throw new NotFoundException("transaction not found: " + id);
         }
+    }
+
+    private void requireNotInvoiced(UUID transactionId) {
+        invoiceRepository.findInvoiceIdForTransaction(transactionId).ifPresent(invoiceId -> {
+            throw new ConflictException("transaction is on invoice: " + invoiceId);
+        });
     }
 
     public TransactionPage findPage(int limit, int offset) {

@@ -335,4 +335,162 @@ class InvoiceControllerIntegrationTests {
             assertEquals(0, dsl.fetchCount(DSL.table("invoice_lines")));
         }
     }
+
+    @Nested
+    class UpdateInvoice {
+
+        @Test
+        void reSnapshotsAtomicallyAndSwapsLines() throws Exception {
+            Map<String, String> ids = postSeeds("flight", "hotel", "rail");
+
+            ObjectNode body = mapper.createObjectNode();
+            body.putArray("transaction_ids").add(ids.get("flight")).add(ids.get("hotel"));
+            MvcResult posted = mvc.perform(post("/invoices")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(mapper.writeValueAsString(body)))
+                    .andExpect(status().isCreated())
+                    .andReturn();
+            JsonNode created = mapper.readTree(posted.getResponse().getContentAsString());
+            String invoiceId = created.get("id").asText();
+            String createdAt = created.get("created_at").asText();
+
+            ObjectNode patch = mapper.createObjectNode();
+            patch.putArray("transaction_ids").add(ids.get("hotel")).add(ids.get("rail"));
+            mvc.perform(patch("/invoices/{id}", invoiceId)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(mapper.writeValueAsString(patch)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.id").value(invoiceId))
+                    .andExpect(jsonPath("$.created_at").value(createdAt))
+                    .andExpect(jsonPath("$.lines", hasSize(2)))
+                    .andExpect(jsonPath("$.grand_total").value(425.70));
+
+            mvc.perform(get("/invoices/{id}", invoiceId))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.lines", hasSize(2)))
+                    .andExpect(jsonPath("$.lines[*].transaction_id",
+                            containsInAnyOrder(ids.get("hotel"), ids.get("rail"))))
+                    .andExpect(jsonPath("$.grand_total").value(425.70));
+
+            assertEquals(1, dsl.fetchCount(DSL.table("invoices")));
+            assertEquals(2, dsl.fetchCount(DSL.table("invoice_lines")));
+        }
+
+        @Test
+        void unknownInvoiceReturns404() throws Exception {
+            Map<String, String> ids = postSeeds("flight");
+            ObjectNode body = mapper.createObjectNode();
+            body.put("transaction_id", ids.get("flight"));
+            mvc.perform(patch("/invoices/{id}", UUID.randomUUID())
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(mapper.writeValueAsString(body)))
+                    .andExpect(status().isNotFound());
+        }
+
+        @Test
+        void mixedCurrencyReturns409AndLeavesInvoiceUnchanged() throws Exception {
+            Map<String, String> ids = postSeeds("flight");
+
+            ObjectNode body = mapper.createObjectNode();
+            body.put("transaction_id", ids.get("flight"));
+            MvcResult posted = mvc.perform(post("/invoices")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(mapper.writeValueAsString(body)))
+                    .andExpect(status().isCreated())
+                    .andReturn();
+            String invoiceId = mapper.readTree(posted.getResponse().getContentAsString())
+                    .get("id").asText();
+
+            JsonNode seeds = mapper.readTree(getClass().getResourceAsStream("/fixtures/seed-payloads.json"));
+            ObjectNode usdHotel = ((ObjectNode) seeds.get("hotel").deepCopy())
+                    .put("currency", "USD")
+                    .put("external_id", "hotel-USD-patch");
+            MvcResult usdResult = mvc.perform(post("/transactions")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(mapper.writeValueAsString(usdHotel)))
+                    .andExpect(status().isCreated())
+                    .andReturn();
+            String usdId = mapper.readTree(usdResult.getResponse().getContentAsString())
+                    .get("id").asText();
+
+            ObjectNode patch = mapper.createObjectNode();
+            patch.putArray("transaction_ids").add(ids.get("flight")).add(usdId);
+            mvc.perform(patch("/invoices/{id}", invoiceId)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(mapper.writeValueAsString(patch)))
+                    .andExpect(status().isConflict());
+
+            mvc.perform(get("/invoices/{id}", invoiceId))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.grand_total").value(220.0))
+                    .andExpect(jsonPath("$.lines", hasSize(1)));
+        }
+    }
+
+    @Nested
+    class DeleteInvoice {
+
+        @Test
+        void dropsInvoiceAndSnapshotRowsOnly() throws Exception {
+            Map<String, String> ids = postSeeds("flight", "hotel");
+
+            ObjectNode body = mapper.createObjectNode();
+            body.putArray("transaction_ids").add(ids.get("flight")).add(ids.get("hotel"));
+            MvcResult posted = mvc.perform(post("/invoices")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(mapper.writeValueAsString(body)))
+                    .andExpect(status().isCreated())
+                    .andReturn();
+            String invoiceId = mapper.readTree(posted.getResponse().getContentAsString())
+                    .get("id").asText();
+
+            mvc.perform(delete("/invoices/{id}", invoiceId))
+                    .andExpect(status().isNoContent());
+
+            mvc.perform(get("/invoices/{id}", invoiceId))
+                    .andExpect(status().isNotFound());
+
+            assertEquals(0, dsl.fetchCount(DSL.table("invoices")));
+            assertEquals(0, dsl.fetchCount(DSL.table("invoice_lines")));
+            assertEquals(0, dsl.fetchCount(DSL.table("invoice_tax_lines")));
+            assertEquals(0, dsl.fetchCount(DSL.table("invoice_fee_lines")));
+
+            assertEquals(2, dsl.fetchCount(DSL.table("transactions")));
+            mvc.perform(get("/transactions/{id}", ids.get("flight")))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.id").value(ids.get("flight")))
+                    .andExpect(jsonPath("$.total").value(220.0));
+            mvc.perform(get("/transactions/{id}", ids.get("hotel")))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.id").value(ids.get("hotel")))
+                    .andExpect(jsonPath("$.total").value(331.70));
+        }
+
+        @Test
+        void unknownIdReturns404() throws Exception {
+            mvc.perform(delete("/invoices/{id}", UUID.randomUUID()))
+                    .andExpect(status().isNotFound());
+        }
+
+        @Test
+        void transactionBecomesPatchableAgainAfterInvoiceDelete() throws Exception {
+            Map<String, String> ids = postSeeds("flight");
+
+            ObjectNode body = mapper.createObjectNode();
+            body.put("transaction_id", ids.get("flight"));
+            MvcResult posted = mvc.perform(post("/invoices")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(mapper.writeValueAsString(body)))
+                    .andExpect(status().isCreated())
+                    .andReturn();
+            String invoiceId = mapper.readTree(posted.getResponse().getContentAsString())
+                    .get("id").asText();
+
+            mvc.perform(delete("/invoices/{id}", invoiceId))
+                    .andExpect(status().isNoContent());
+
+            mvc.perform(delete("/transactions/{id}", ids.get("flight")))
+                    .andExpect(status().isNoContent());
+        }
+    }
 }
