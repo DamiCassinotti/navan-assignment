@@ -1,0 +1,21 @@
+server:
+  port: 8080
+
+spring:
+  datasource:
+    url: jdbc:sqlite:${NAVAN_DB_PATH:./data/navan.db}
+    driver-class-name: org.sqlite.JDBC
+    hikari:
+      maximum-pool-size: 1
+      pool-name: navan-sqlite
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema.sql
+  jooq:
+    sql-dialect: SQLITE
+
+logging:
+  level:
+    org.jooq: WARN
+    org.springframework.jdbc: WARN
