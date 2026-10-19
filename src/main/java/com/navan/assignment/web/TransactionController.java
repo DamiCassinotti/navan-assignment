@@ -94,6 +94,8 @@ public class TransactionController {
             throw new BadRequestException("currency required");
         if (request.occurredAt() == null) throw new BadRequestException("occurred_at required");
         if (request.total() == null) throw new BadRequestException("total required");
+        if (request.taxLines() == null) throw new BadRequestException("tax_lines required");
+        if (request.feeLines() == null) throw new BadRequestException("fee_lines required");
     }
 
     private static void requireUpdateFields(UpdateTransactionRequest request) {
@@ -103,6 +105,8 @@ public class TransactionController {
             throw new BadRequestException("currency required");
         if (request.occurredAt() == null) throw new BadRequestException("occurred_at required");
         if (request.total() == null) throw new BadRequestException("total required");
+        if (request.taxLines() == null) throw new BadRequestException("tax_lines required");
+        if (request.feeLines() == null) throw new BadRequestException("fee_lines required");
     }
 
     private static List<TaxLine> mapTaxes(List<TaxLineDto> taxLines) {

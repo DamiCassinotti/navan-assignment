@@ -18,6 +18,7 @@ import com.navan.assignment.transaction.model.TransactionType;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -54,8 +55,8 @@ public class InvoiceRepository {
     }
 
     public List<Invoice> findAll(int limit, int offset) {
+        Map<UUID, List<InvoiceLine>> linesByInvoice = new LinkedHashMap<>();
         Map<UUID, Invoice> headers = new LinkedHashMap<>();
-        Map<UUID, List<InvoiceLine>> linesByInvoice = new HashMap<>();
         dsl.selectFrom(INVOICES)
                 .orderBy(INVOICES.CREATED_AT.asc(), INVOICES.ID.asc())
                 .limit(limit)
@@ -77,57 +78,9 @@ public class InvoiceRepository {
                 });
         if (headers.isEmpty()) return List.of();
 
-        Map<UUID, UUID> lineToInvoice = new HashMap<>();
-        Map<UUID, InvoiceLineShell> lineShells = new LinkedHashMap<>();
-        dsl.selectFrom(INVOICE_LINES)
-                .where(INVOICE_LINES.INVOICE_ID.in(headers.keySet()))
-                .fetch()
-                .forEach(lineRow -> {
-                    UUID lineId = lineRow.get(INVOICE_LINES.ID);
-                    lineToInvoice.put(lineId, lineRow.get(INVOICE_LINES.INVOICE_ID));
-                    lineShells.put(lineId, new InvoiceLineShell(
-                            lineId,
-                            lineRow.get(INVOICE_LINES.TRANSACTION_ID),
-                            TransactionType.fromWire(lineRow.get(INVOICE_LINES.TYPE)),
-                            lineRow.get(INVOICE_LINES.CURRENCY),
-                            Instant.parse(lineRow.get(INVOICE_LINES.OCCURRED_AT)),
-                            new BigDecimal(lineRow.get(INVOICE_LINES.TOTAL)),
-                            readJson(lineRow.get(INVOICE_LINES.METADATA_SNAPSHOT)),
-                            new ArrayList<>(),
-                            new ArrayList<>()
-                    ));
-                });
-
-        if (!lineShells.isEmpty()) {
-            dsl.selectFrom(INVOICE_TAX_LINES)
-                    .where(INVOICE_TAX_LINES.INVOICE_LINE_ID.in(lineShells.keySet()))
-                    .fetch()
-                    .forEach(taxRow -> {
-                        InvoiceLineShell shell = lineShells.get(taxRow.get(INVOICE_TAX_LINES.INVOICE_LINE_ID));
-                        if (shell != null) shell.taxLines.add(new InvoiceTaxLine(
-                                taxRow.get(INVOICE_TAX_LINES.NAME),
-                                taxRow.get(INVOICE_TAX_LINES.RATE) == null ? null : new BigDecimal(taxRow.get(INVOICE_TAX_LINES.RATE)),
-                                new BigDecimal(taxRow.get(INVOICE_TAX_LINES.AMOUNT))
-                        ));
-                    });
-            dsl.selectFrom(INVOICE_FEE_LINES)
-                    .where(INVOICE_FEE_LINES.INVOICE_LINE_ID.in(lineShells.keySet()))
-                    .fetch()
-                    .forEach(feeRow -> {
-                        InvoiceLineShell shell = lineShells.get(feeRow.get(INVOICE_FEE_LINES.INVOICE_LINE_ID));
-                        if (shell != null) shell.feeLines.add(new InvoiceFeeLine(
-                                feeRow.get(INVOICE_FEE_LINES.NAME),
-                                new BigDecimal(feeRow.get(INVOICE_FEE_LINES.AMOUNT))
-                        ));
-                    });
-        }
-
-        for (InvoiceLineShell shell : lineShells.values()) {
-            UUID invoiceId = lineToInvoice.get(shell.id);
-            linesByInvoice.get(invoiceId).add(new InvoiceLine(
-                    shell.id, shell.transactionId, shell.type, shell.currency, shell.occurredAt,
-                    shell.total, shell.metadataSnapshot, shell.taxLines, shell.feeLines
-            ));
+        Map<UUID, List<InvoiceLine>> loaded = loadLinesBatched(headers.keySet());
+        for (Map.Entry<UUID, List<InvoiceLine>> entry : loaded.entrySet()) {
+            linesByInvoice.get(entry.getKey()).addAll(entry.getValue());
         }
 
         return new ArrayList<>(headers.values());
@@ -231,11 +184,7 @@ public class InvoiceRepository {
         Record row = dsl.selectFrom(INVOICES).where(INVOICES.ID.eq(id)).fetchOne();
         if (row == null) return Optional.empty();
 
-        List<InvoiceLine> lines = new ArrayList<>();
-        dsl.selectFrom(INVOICE_LINES)
-                .where(INVOICE_LINES.INVOICE_ID.eq(id))
-                .fetch()
-                .forEach(lineRow -> lines.add(hydrateLine(lineRow)));
+        List<InvoiceLine> lines = loadLinesBatched(List.of(id)).getOrDefault(id, List.of());
 
         return Optional.of(new Invoice(
                 id,
@@ -248,36 +197,63 @@ public class InvoiceRepository {
         ));
     }
 
-    private InvoiceLine hydrateLine(Record row) {
-        UUID lineId = row.get(INVOICE_LINES.ID);
-        List<InvoiceTaxLine> taxes = new ArrayList<>();
+    private Map<UUID, List<InvoiceLine>> loadLinesBatched(Collection<UUID> invoiceIds) {
+        Map<UUID, List<InvoiceLine>> linesByInvoice = new HashMap<>();
+        for (UUID invoiceId : invoiceIds) linesByInvoice.put(invoiceId, new ArrayList<>());
+
+        Map<UUID, UUID> lineToInvoice = new HashMap<>();
+        Map<UUID, InvoiceLineShell> lineShells = new LinkedHashMap<>();
+        dsl.selectFrom(INVOICE_LINES)
+                .where(INVOICE_LINES.INVOICE_ID.in(invoiceIds))
+                .fetch()
+                .forEach(lineRow -> {
+                    UUID lineId = lineRow.get(INVOICE_LINES.ID);
+                    lineToInvoice.put(lineId, lineRow.get(INVOICE_LINES.INVOICE_ID));
+                    lineShells.put(lineId, new InvoiceLineShell(
+                            lineId,
+                            lineRow.get(INVOICE_LINES.TRANSACTION_ID),
+                            TransactionType.fromWire(lineRow.get(INVOICE_LINES.TYPE)),
+                            lineRow.get(INVOICE_LINES.CURRENCY),
+                            Instant.parse(lineRow.get(INVOICE_LINES.OCCURRED_AT)),
+                            new BigDecimal(lineRow.get(INVOICE_LINES.TOTAL)),
+                            readJson(lineRow.get(INVOICE_LINES.METADATA_SNAPSHOT)),
+                            new ArrayList<>(),
+                            new ArrayList<>()
+                    ));
+                });
+
+        if (lineShells.isEmpty()) return linesByInvoice;
+
         dsl.selectFrom(INVOICE_TAX_LINES)
-                .where(INVOICE_TAX_LINES.INVOICE_LINE_ID.eq(lineId))
+                .where(INVOICE_TAX_LINES.INVOICE_LINE_ID.in(lineShells.keySet()))
                 .fetch()
-                .forEach(taxRow -> taxes.add(new InvoiceTaxLine(
-                        taxRow.get(INVOICE_TAX_LINES.NAME),
-                        taxRow.get(INVOICE_TAX_LINES.RATE) == null ? null : new BigDecimal(taxRow.get(INVOICE_TAX_LINES.RATE)),
-                        new BigDecimal(taxRow.get(INVOICE_TAX_LINES.AMOUNT))
-                )));
-        List<InvoiceFeeLine> fees = new ArrayList<>();
+                .forEach(taxRow -> {
+                    InvoiceLineShell shell = lineShells.get(taxRow.get(INVOICE_TAX_LINES.INVOICE_LINE_ID));
+                    if (shell != null) shell.taxLines.add(new InvoiceTaxLine(
+                            taxRow.get(INVOICE_TAX_LINES.NAME),
+                            taxRow.get(INVOICE_TAX_LINES.RATE) == null ? null : new BigDecimal(taxRow.get(INVOICE_TAX_LINES.RATE)),
+                            new BigDecimal(taxRow.get(INVOICE_TAX_LINES.AMOUNT))
+                    ));
+                });
         dsl.selectFrom(INVOICE_FEE_LINES)
-                .where(INVOICE_FEE_LINES.INVOICE_LINE_ID.eq(lineId))
+                .where(INVOICE_FEE_LINES.INVOICE_LINE_ID.in(lineShells.keySet()))
                 .fetch()
-                .forEach(feeRow -> fees.add(new InvoiceFeeLine(
-                        feeRow.get(INVOICE_FEE_LINES.NAME),
-                        new BigDecimal(feeRow.get(INVOICE_FEE_LINES.AMOUNT))
-                )));
-        return new InvoiceLine(
-                lineId,
-                row.get(INVOICE_LINES.TRANSACTION_ID),
-                TransactionType.fromWire(row.get(INVOICE_LINES.TYPE)),
-                row.get(INVOICE_LINES.CURRENCY),
-                Instant.parse(row.get(INVOICE_LINES.OCCURRED_AT)),
-                new BigDecimal(row.get(INVOICE_LINES.TOTAL)),
-                readJson(row.get(INVOICE_LINES.METADATA_SNAPSHOT)),
-                taxes,
-                fees
-        );
+                .forEach(feeRow -> {
+                    InvoiceLineShell shell = lineShells.get(feeRow.get(INVOICE_FEE_LINES.INVOICE_LINE_ID));
+                    if (shell != null) shell.feeLines.add(new InvoiceFeeLine(
+                            feeRow.get(INVOICE_FEE_LINES.NAME),
+                            new BigDecimal(feeRow.get(INVOICE_FEE_LINES.AMOUNT))
+                    ));
+                });
+
+        for (InvoiceLineShell shell : lineShells.values()) {
+            UUID invoiceId = lineToInvoice.get(shell.id);
+            linesByInvoice.get(invoiceId).add(new InvoiceLine(
+                    shell.id, shell.transactionId, shell.type, shell.currency, shell.occurredAt,
+                    shell.total, shell.metadataSnapshot, shell.taxLines, shell.feeLines
+            ));
+        }
+        return linesByInvoice;
     }
 
     private String writeJson(Object value) {

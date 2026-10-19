@@ -480,6 +480,28 @@ class TransactionControllerIntegrationTests {
             mvc.perform(get("/transactions/{id}", UUID.randomUUID()))
                     .andExpect(status().isNotFound());
         }
+
+        @Test
+        void rejectsMissingTaxLines() throws Exception {
+            String bad = "{\"type\":\"flight\",\"external_id\":\"miss-tax-1\",\"currency\":\"EUR\","
+                    + "\"occurred_at\":\"2026-03-11T06:40:00Z\",\"total\":10,"
+                    + "\"metadata\":" + FLIGHT_METADATA_LHR + ","
+                    + "\"fee_lines\":[]}";
+            mvc.perform(post("/transactions")
+                            .contentType(MediaType.APPLICATION_JSON).content(bad))
+                    .andExpect(status().isBadRequest());
+        }
+
+        @Test
+        void rejectsMissingFeeLines() throws Exception {
+            String bad = "{\"type\":\"flight\",\"external_id\":\"miss-fee-1\",\"currency\":\"EUR\","
+                    + "\"occurred_at\":\"2026-03-11T06:40:00Z\",\"total\":10,"
+                    + "\"metadata\":" + FLIGHT_METADATA_LHR + ","
+                    + "\"tax_lines\":[]}";
+            mvc.perform(post("/transactions")
+                            .contentType(MediaType.APPLICATION_JSON).content(bad))
+                    .andExpect(status().isBadRequest());
+        }
     }
 
     @Nested
