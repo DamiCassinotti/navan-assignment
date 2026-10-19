@@ -1,9 +1,11 @@
 package com.navan.assignment.web;
 
 import com.navan.assignment.common.errors.BadRequestException;
+import com.navan.assignment.invoice.InvoicePage;
 import com.navan.assignment.invoice.InvoiceService;
 import com.navan.assignment.invoice.model.Invoice;
 import com.navan.assignment.web.dto.CreateInvoiceRequest;
+import com.navan.assignment.web.dto.InvoicePageResponse;
 import com.navan.assignment.web.dto.InvoiceResponse;
 import java.util.List;
 import java.util.UUID;
@@ -14,6 +16,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -40,5 +43,16 @@ public class InvoiceController {
     @GetMapping("/{id}")
     public InvoiceResponse get(@PathVariable UUID id) {
         return InvoiceResponse.from(invoiceService.findById(id));
+    }
+
+    @GetMapping
+    public InvoicePageResponse list(
+            @RequestParam(defaultValue = "50") int limit,
+            @RequestParam(defaultValue = "0") int offset) {
+        InvoicePage page = invoiceService.findPage(limit, offset);
+        List<InvoiceResponse> items = page.items().stream()
+                .map(InvoiceResponse::from)
+                .toList();
+        return new InvoicePageResponse(items, page.limit(), page.offset(), page.hasMore());
     }
 }

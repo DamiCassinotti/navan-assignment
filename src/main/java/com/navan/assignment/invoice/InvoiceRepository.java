@@ -80,6 +80,33 @@ public class InvoiceRepository {
         }
     }
 
+    public List<Invoice> findAll(int limit, int offset) {
+        List<Invoice> result = new ArrayList<>();
+        dsl.selectFrom(INVOICES)
+                .orderBy(INVOICES.CREATED_AT.asc(), INVOICES.ID.asc())
+                .limit(limit)
+                .offset(offset)
+                .fetch()
+                .forEach(row -> {
+                    UUID id = row.get(INVOICES.ID);
+                    List<InvoiceLine> lines = new ArrayList<>();
+                    dsl.selectFrom(INVOICE_LINES)
+                            .where(INVOICE_LINES.INVOICE_ID.eq(id))
+                            .fetch()
+                            .forEach(lineRow -> lines.add(hydrateLine(lineRow)));
+                    result.add(new Invoice(
+                            id,
+                            row.get(INVOICES.CURRENCY),
+                            new BigDecimal(row.get(INVOICES.GRAND_TOTAL)),
+                            readRollup(row.get(INVOICES.TAX_ROLLUP)),
+                            readRollup(row.get(INVOICES.FEE_ROLLUP)),
+                            lines,
+                            Instant.parse(row.get(INVOICES.CREATED_AT))
+                    ));
+                });
+        return result;
+    }
+
     public Optional<Invoice> findById(UUID id) {
         Record row = dsl.selectFrom(INVOICES).where(INVOICES.ID.eq(id)).fetchOne();
         if (row == null) return Optional.empty();

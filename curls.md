@@ -192,3 +192,17 @@ curl -s localhost:8080/invoices/$INVOICE_ID | jq
 # Unknown id — 404
 curl -i localhost:8080/invoices/00000000-0000-0000-0000-000000000000
 ```
+
+## `GET /invoices`
+
+```bash
+# First page (defaults: limit=50, offset=0)
+curl -s localhost:8080/invoices | jq
+
+# Paged
+curl -s "localhost:8080/invoices?limit=2&offset=0" | jq
+curl -s "localhost:8080/invoices?limit=2&offset=2" | jq
+
+# limit > 100 — 400
+curl -i "localhost:8080/invoices?limit=101"
+```

@@ -8,9 +8,16 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.navan.assignment.transaction.TransactionRepository;
+import com.navan.assignment.transaction.model.FeeLine;
+import com.navan.assignment.transaction.model.TaxLine;
+import com.navan.assignment.transaction.model.Transaction;
+import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.jooq.DSLContext;
@@ -49,6 +56,7 @@ class InvoiceControllerIntegrationTests {
     @Autowired MockMvc mvc;
     @Autowired ObjectMapper mapper;
     @Autowired DSLContext dsl;
+    @Autowired TransactionRepository transactionRepository;
 
     @BeforeEach
     void clean() {
@@ -184,6 +192,125 @@ class InvoiceControllerIntegrationTests {
                     .andExpect(status().isCreated())
                     .andExpect(jsonPath("$.lines", hasSize(1)))
                     .andExpect(jsonPath("$.grand_total").value(220.0));
+        }
+    }
+
+    @Nested
+    class Pagination {
+
+        @Test
+        void defaultsReturnAllInvoicesWithoutMore() throws Exception {
+            Map<String, String> ids = postSeeds("flight", "hotel");
+            createInvoice(ids.get("flight"));
+            createInvoice(ids.get("hotel"));
+
+            mvc.perform(get("/invoices"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.items", hasSize(2)))
+                    .andExpect(jsonPath("$.limit").value(50))
+                    .andExpect(jsonPath("$.offset").value(0))
+                    .andExpect(jsonPath("$.has_more").value(false));
+        }
+
+        @Test
+        void limitAndOffsetPageThroughResults() throws Exception {
+            Map<String, String> ids = postSeeds("flight", "hotel", "rail");
+            String firstInvoice = createInvoice(ids.get("flight"));
+            String secondInvoice = createInvoice(ids.get("hotel"));
+            String thirdInvoice = createInvoice(ids.get("rail"));
+
+            MvcResult firstPage = mvc.perform(get("/invoices").param("limit", "2").param("offset", "0"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.items", hasSize(2)))
+                    .andExpect(jsonPath("$.limit").value(2))
+                    .andExpect(jsonPath("$.offset").value(0))
+                    .andExpect(jsonPath("$.has_more").value(true))
+                    .andReturn();
+
+            JsonNode firstItems = mapper.readTree(firstPage.getResponse().getContentAsString()).get("items");
+            assertEquals(firstInvoice, firstItems.get(0).get("id").asText());
+            assertEquals(secondInvoice, firstItems.get(1).get("id").asText());
+
+            MvcResult secondPage = mvc.perform(get("/invoices").param("limit", "2").param("offset", "2"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.items", hasSize(1)))
+                    .andExpect(jsonPath("$.has_more").value(false))
+                    .andReturn();
+
+            JsonNode secondItems = mapper.readTree(secondPage.getResponse().getContentAsString()).get("items");
+            assertEquals(thirdInvoice, secondItems.get(0).get("id").asText());
+        }
+
+        @Test
+        void limitAbove100IsRejected() throws Exception {
+            mvc.perform(get("/invoices").param("limit", "101"))
+                    .andExpect(status().isBadRequest());
+        }
+
+        private String createInvoice(String transactionId) throws Exception {
+            ObjectNode body = mapper.createObjectNode();
+            body.put("transaction_id", transactionId);
+            MvcResult result = mvc.perform(post("/invoices")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(mapper.writeValueAsString(body)))
+                    .andExpect(status().isCreated())
+                    .andReturn();
+            return mapper.readTree(result.getResponse().getContentAsString()).get("id").asText();
+        }
+    }
+
+    @Nested
+    class SnapshotImmutability {
+
+        @Test
+        void mutatingUnderlyingTransactionDoesNotAffectInvoice() throws Exception {
+            Map<String, String> ids = postSeeds("flight", "hotel");
+
+            ObjectNode body = mapper.createObjectNode();
+            body.putArray("transaction_ids").add(ids.get("flight")).add(ids.get("hotel"));
+
+            MvcResult posted = mvc.perform(post("/invoices")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(mapper.writeValueAsString(body)))
+                    .andExpect(status().isCreated())
+                    .andReturn();
+
+            JsonNode created = mapper.readTree(posted.getResponse().getContentAsString());
+            String invoiceId = created.get("id").asText();
+            double originalGrandTotal = created.get("grand_total").asDouble();
+            JsonNode originalTaxRollup = created.get("tax_rollup");
+            JsonNode originalFeeRollup = created.get("fee_rollup");
+
+            UUID flightId = UUID.fromString(ids.get("flight"));
+            Transaction flight = transactionRepository.findById(flightId).orElseThrow();
+            Transaction mutated = new Transaction(
+                    flight.id(),
+                    flight.externalId(),
+                    flight.type(),
+                    flight.currency(),
+                    flight.occurredAt(),
+                    new BigDecimal("9999.99"),
+                    flight.metadata(),
+                    List.of(new TaxLine("Mutated tax", new BigDecimal("0.5"), new BigDecimal("1234.56"))),
+                    List.of(new FeeLine("Mutated fee", new BigDecimal("777.00"))),
+                    flight.createdAt(),
+                    Instant.now()
+            );
+            transactionRepository.updateHeader(mutated);
+            transactionRepository.deleteLines(flightId);
+            transactionRepository.insertLines(mutated);
+
+            mvc.perform(get("/invoices/{id}", invoiceId))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.grand_total").value(originalGrandTotal))
+                    .andExpect(jsonPath("$.tax_rollup").value(mapper.convertValue(originalTaxRollup, List.class)))
+                    .andExpect(jsonPath("$.fee_rollup").value(mapper.convertValue(originalFeeRollup, List.class)))
+                    .andExpect(jsonPath("$.lines[?(@.transaction_id=='" + ids.get("flight") + "')].total")
+                            .value(contains(220.0)))
+                    .andExpect(jsonPath("$.lines[?(@.transaction_id=='" + ids.get("flight") + "')].tax_lines[0].name")
+                            .value(contains("Airport tax")))
+                    .andExpect(jsonPath("$.lines[?(@.transaction_id=='" + ids.get("flight") + "')].fee_lines[0].name")
+                            .value(contains("YQ")));
         }
     }
 

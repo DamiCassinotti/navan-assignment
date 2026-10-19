@@ -107,6 +107,16 @@ public class InvoiceService {
         return invoice;
     }
 
+    public InvoicePage findPage(int limit, int offset) {
+        if (limit < 1) throw new BadRequestException("limit must be >= 1");
+        if (limit > 100) throw new BadRequestException("limit must be <= 100");
+        if (offset < 0) throw new BadRequestException("offset must be >= 0");
+        List<Invoice> rows = invoiceRepository.findAll(limit + 1, offset);
+        boolean hasMore = rows.size() > limit;
+        List<Invoice> items = hasMore ? rows.subList(0, limit) : rows;
+        return new InvoicePage(items, limit, offset, hasMore);
+    }
+
     public Invoice findById(UUID id) {
         return invoiceRepository.findById(id)
                 .orElseThrow(() -> new NotFoundException("invoice not found: " + id));
