@@ -1,24 +1,50 @@
 # navan-assignment
 
-Take-home: travel transactions + invoice service. See [`task-b-travel-inventory-invoice-CANDIDATE.md`](task-b-travel-inventory-invoice-CANDIDATE.md) for the brief.
+Take-home: travel transactions + invoice service. See [`task-b-travel-inventory-invoice-CANDIDATE.md`](task-b-travel-inventory-invoice-CANDIDATE.md) for the brief and [`PLAN.md`](PLAN.md) for the approach.
 
 ## Stack
 
 - Java 21, Spring Boot 3.3
 - SQLite (file at `./data/navan.db`, auto-created on first boot)
-- jOOQ 3.19 for queries, with codegen off the project `schema.sql`
+- jOOQ 3.19 for queries, codegen off `src/main/resources/schema.sql`
 - Gradle wrapper
 
 ## Run
 
 ```bash
-./gradlew bootRun
-./gradlew test
+./gradlew bootRun       # starts the service on :8080
+./gradlew test          # runs unit + integration tests
 ./gradlew build
 ```
 
-The DB file lives at `./data/navan.db` and is created on first boot. Delete the file to start fresh — Spring Boot re-runs `schema.sql` on every startup.
+## Endpoints
+
+- `POST /transactions` — create a transaction. `201` on insert, `200` on duplicate `external_id` (returns the existing row).
+- `GET /transactions/{id}` — fetch by id, `404` if missing.
+
+### curl
+
+```bash
+# Flight (fresh)
+curl -s -X POST localhost:8080/transactions -H 'content-type: application/json' \
+  -d @fixtures/task-b/seed-payloads.json  # (post an individual fixture; the file holds multiple)
+
+# Duplicate POST — same external_id → 200 OK with the original row
+```
+
+See `fixtures/task-b/seed-payloads.json` for one payload per type (`flight`, `hotel`, `rail`, two `navan_fee`s) plus a `duplicate_flight` entry to exercise idempotency.
 
 ## Schema
 
-Schema lives in `src/main/resources/schema.sql` and is applied idempotently (`CREATE TABLE IF NOT EXISTS`) on every boot via Spring Boot's SQL init. No migration tool for now — restart with a fresh DB file when the schema changes.
+Schema lives in `src/main/resources/schema.sql` and is applied idempotently (`CREATE TABLE IF NOT EXISTS`) on every boot via Spring Boot's SQL init. No migration tool.
+
+**When the schema changes**, delete `./data/navan.db` and restart — `IF NOT EXISTS` will not alter existing tables. Tests use a per-run temp DB file, so they're unaffected.
+
+Foreign keys are enabled per connection via Hikari's `connection-init-sql: "PRAGMA foreign_keys = ON"` — SQLite does not enforce FKs by default.
+
+## Tests
+
+- `*UnitTests` — plain JUnit 5 + Mockito, no Spring context.
+- `*IntegrationTests` — `@SpringBootTest` + MockMvc with a per-test-class temp SQLite file.
+
+Run `./gradlew test`.

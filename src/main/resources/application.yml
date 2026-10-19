@@ -8,12 +8,15 @@ spring:
     hikari:
       maximum-pool-size: 1
       pool-name: navan-sqlite
+      connection-init-sql: "PRAGMA foreign_keys = ON"
   sql:
     init:
       mode: always
       schema-locations: classpath:schema.sql
   jooq:
     sql-dialect: SQLITE
+  jackson:
+    property-naming-strategy: SNAKE_CASE
 
 logging:
   level:
