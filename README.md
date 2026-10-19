@@ -51,12 +51,15 @@ curl -s -X POST localhost:8080/transactions -H 'content-type: application/json' 
        "occurred_at":"2026-03-11T06:40:00Z","total":220.00,
        "tax_lines":[{"name":"Airport tax","amount":15.00}],
        "fee_lines":[{"name":"YQ","amount":25.00}],
-       "metadata":{"origin":"TXL","destination":"LHR","fare":180.0}}'
+       "metadata":{"origin":"TXL","destination":"LHR","fare":180.0,
+         "coupons":[{"flight_number":"BA982","from":"TXL","to":"LHR",
+                     "departure":"2026-03-11T07:00:00Z","arrival":"2026-03-11T08:20:00Z"}]}}'
 
 curl -s -X POST localhost:8080/transactions -H 'content-type: application/json' \
   -d '{"type":"flight","external_id":"flight-TXL-LHR-2026-03-11","currency":"EUR",
        "occurred_at":"2026-03-11T06:40:00Z","total":999.99,
-       "tax_lines":[],"fee_lines":[],"metadata":{"origin":"TXL","destination":"LHR"}}'
+       "tax_lines":[],"fee_lines":[],
+       "metadata":{"origin":"TXL","destination":"LHR","fare":180.0,"coupons":[]}}'
 
 # Confirm one row — expect 1
 curl -s 'localhost:8080/transactions?limit=100' \
@@ -96,7 +99,7 @@ Schema lives in `src/main/resources/schema.sql` and is applied idempotently (`CR
 
 **When the schema changes**, delete `./data/navan.db` and restart — `IF NOT EXISTS` will not alter existing tables. Tests use a per-run temp DB file, so they're unaffected.
 
-Foreign keys are enabled per connection via Hikari's `connection-init-sql: "PRAGMA foreign_keys = ON"` — SQLite does not enforce FKs by default.
+SQLite PRAGMAs (`foreign_keys=on`, `journal_mode=WAL`, `busy_timeout=5000`, `synchronous=NORMAL`) are passed in the JDBC URL so they apply to every pooled connection. WAL + a 10-connection Hikari pool are what make the concurrent-create test actually race at the DB; see [`ARCHITECTURE.md`](ARCHITECTURE.md) for the trade-offs.
 
 ## Tests
 

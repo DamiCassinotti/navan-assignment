@@ -43,6 +43,25 @@ Why columns **and** a JSON metadata snapshot:
 
 The invoiced-transaction guard lives on top of this: `PATCH` / `DELETE /transactions/{id}` first run `EXISTS(SELECT 1 FROM invoice_lines WHERE transaction_id = ?)`; if any row exists, the request is rejected with 409. The snapshot columns are untouched regardless, so even a direct repository mutation that bypasses the guard (exercised in the `Snapshot` test) leaves the invoice totals intact.
 
+## Tables and models
+
+**Taxes vs fees.** Two separate child tables (`tax_lines` / `fee_lines`), each a list of `{name, amount}` rows pointed at a transaction, with an optional `rate` on tax lines. They are not mashed into a single "extras" column, because the invoice rollup groups them differently — tax rollup is `(name, rate) → sum(amount)`, fee rollup is `name → sum(amount)` — and that distinction is a real business rule (VAT at 7% is one line in the rollup; two "YQ" surcharges from two carriers are one line too, but a VAT and a YQ with the same amount are not). Mirrored one-to-one onto `invoice_tax_lines` / `invoice_fee_lines` for the snapshot.
+
+**Type-specific data.** All four transaction types share the `transactions` header (identity, currency, totals, timestamps) plus the same tax/fee child tables. Per-type payload lives in a single `metadata TEXT` JSON column:
+
+- **flight** — `origin`, `destination`, `fare`, and a `coupons[]` array with `flight_number`, optional `carrier`, `from`, `to`, `departure`, `arrival`. Round-trips carry more than one coupon.
+- **hotel** — `name`, `address{street, city, country}`, `check_in`, `check_out`, `nights`, `room_rate_per_night`, optional `extras`.
+- **rail** — `legs[]` with `origin`, `destination`, `departure`, `arrival`, optional `train_number`/`class`. A journey with a change is two legs.
+- **navan_fee** — `fee_kind` ∈ {`trip_fee`, `agent_call_fee`}, optional `description` and `related_external_id`.
+
+Why JSON and not per-type child tables (coupons / legs / addresses):
+
+- Nothing in the API filters, joins, or aggregates on these fields — they're round-tripped on read, snapshotted on invoice, and otherwise opaque. A column we never query doesn't earn an index or a schema.
+- Per-type columns would be a wide, mostly-null `transactions` table and a schema change every time a new type appears (the brief already hints at more Navan-owned charge kinds).
+- Validation that these keys/shapes are present on write lives in `MetadataValidator` (one place, type-dispatched switch) — so the "model" is enforced at the service edge even though the storage is JSON. Unknown `type` or unknown `fee_kind` → 400.
+
+The snapshot path copies this JSON verbatim into `invoice_lines.metadata_snapshot`, so a post-invoice edit to the transaction's `metadata` can't retroactively mutate the invoice.
+
 ## Indexes
 
 Called out explicitly because each one earns its place:
