@@ -72,6 +72,17 @@ public class TransactionRepository {
         return row == null ? Optional.empty() : Optional.of(hydrate(row));
     }
 
+    public List<Transaction> findAll(int limit, int offset) {
+        List<Transaction> result = new ArrayList<>();
+        dsl.selectFrom(TRANSACTIONS)
+                .orderBy(TRANSACTIONS.CREATED_AT.asc(), TRANSACTIONS.ID.asc())
+                .limit(limit)
+                .offset(offset)
+                .fetch()
+                .forEach(row -> result.add(hydrate(row)));
+        return result;
+    }
+
     public Optional<Transaction> findByExternalId(String externalId) {
         Record row = dsl.selectFrom(TRANSACTIONS).where(TRANSACTIONS.EXTERNAL_ID.eq(externalId)).fetchOne();
         return row == null ? Optional.empty() : Optional.of(hydrate(row));

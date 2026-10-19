@@ -78,3 +78,16 @@ curl -s localhost:8080/transactions/$ID | jq
 # Unknown id — expect 404
 curl -i localhost:8080/transactions/00000000-0000-0000-0000-000000000000
 ```
+
+## `GET /transactions`
+
+```bash
+# Default page — limit=50, offset=0; response is { items, limit, offset, has_more }
+curl -s localhost:8080/transactions | jq
+
+# Explicit paging — walk with offset while has_more is true
+curl -s 'localhost:8080/transactions?limit=10&offset=20' | jq
+
+# limit > 100 — expect 400
+curl -i 'localhost:8080/transactions?limit=1000'
+```

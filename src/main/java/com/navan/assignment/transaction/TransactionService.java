@@ -1,6 +1,8 @@
 package com.navan.assignment.transaction;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.navan.assignment.common.errors.BadRequestException;
+import com.navan.assignment.common.errors.NotFoundException;
 import com.navan.assignment.transaction.model.FeeLine;
 import com.navan.assignment.transaction.model.TaxLine;
 import com.navan.assignment.transaction.model.Transaction;
@@ -63,5 +65,20 @@ public class TransactionService {
         }
         transactionRepository.insertLines(transaction);
         return new CreateTransactionResult(transaction, true);
+    }
+
+    public Transaction findById(UUID id) {
+        return transactionRepository.findById(id)
+                .orElseThrow(() -> new NotFoundException("transaction not found: " + id));
+    }
+
+    public TransactionPage findPage(int limit, int offset) {
+        if (limit < 1) throw new BadRequestException("limit must be >= 1");
+        if (limit > 100) throw new BadRequestException("limit must be <= 100");
+        if (offset < 0) throw new BadRequestException("offset must be >= 0");
+        List<Transaction> rows = transactionRepository.findAll(limit + 1, offset);
+        boolean hasMore = rows.size() > limit;
+        List<Transaction> items = hasMore ? rows.subList(0, limit) : rows;
+        return new TransactionPage(items, limit, offset, hasMore);
     }
 }

@@ -1,15 +1,15 @@
 package com.navan.assignment.web;
 
 import com.navan.assignment.common.errors.BadRequestException;
-import com.navan.assignment.common.errors.NotFoundException;
 import com.navan.assignment.transaction.CreateTransactionResult;
-import com.navan.assignment.transaction.TransactionRepository;
+import com.navan.assignment.transaction.TransactionPage;
 import com.navan.assignment.transaction.TransactionService;
 import com.navan.assignment.transaction.model.FeeLine;
 import com.navan.assignment.transaction.model.TaxLine;
 import com.navan.assignment.web.dto.CreateTransactionRequest;
 import com.navan.assignment.web.dto.FeeLineDto;
 import com.navan.assignment.web.dto.TaxLineDto;
+import com.navan.assignment.web.dto.TransactionPageResponse;
 import com.navan.assignment.web.dto.TransactionResponse;
 import java.util.List;
 import java.util.UUID;
@@ -22,19 +22,16 @@ import org.springframework.web.bind.annotation.*;
 @RequestMapping("/transactions")
 public class TransactionController {
 
-    private final TransactionService service;
-    private final TransactionRepository repository;
+    private final TransactionService transactionService;
 
-    public TransactionController(TransactionService service,
-                                 TransactionRepository repository) {
-        this.service = service;
-        this.repository = repository;
+    public TransactionController(TransactionService transactionService) {
+        this.transactionService = transactionService;
     }
 
     @PostMapping
     public ResponseEntity<TransactionResponse> create(@RequestBody CreateTransactionRequest request) {
         requireFields(request);
-        CreateTransactionResult result = service.create(
+        CreateTransactionResult result = transactionService.create(
                 request.externalId(),
                 request.type(),
                 request.currency(),
@@ -52,9 +49,18 @@ public class TransactionController {
 
     @GetMapping("/{id}")
     public TransactionResponse get(@PathVariable UUID id) {
-        return repository.findById(id)
+        return TransactionResponse.from(transactionService.findById(id));
+    }
+
+    @GetMapping
+    public TransactionPageResponse list(
+            @RequestParam(defaultValue = "50") int limit,
+            @RequestParam(defaultValue = "0") int offset) {
+        TransactionPage page = transactionService.findPage(limit, offset);
+        List<TransactionResponse> items = page.items().stream()
                 .map(TransactionResponse::from)
-                .orElseThrow(() -> new NotFoundException("transaction not found: " + id));
+                .toList();
+        return new TransactionPageResponse(items, page.limit(), page.offset(), page.hasMore());
     }
 
     private static void requireFields(CreateTransactionRequest request) {

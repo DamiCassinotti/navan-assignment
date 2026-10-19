@@ -8,6 +8,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -174,6 +175,87 @@ class TransactionControllerIntegrationTests {
                     DSL.table("transactions"),
                     DSL.field("external_id").eq(externalId));
             assertEquals(1, rowCount);
+        }
+    }
+
+    @Nested
+    class Pagination {
+
+        @Test
+        void listsWithDefaultLimit50AndRespectsOffset() throws Exception {
+            JsonNode seeds = mapper.readTree(
+                    getClass().getResourceAsStream("/fixtures/seed-payloads.json"));
+            JsonNode base = seeds.get("flight");
+
+            int count = 55;
+            for (int i = 0; i < count; i++) {
+                ObjectNode copy = ((ObjectNode) base.deepCopy())
+                        .put("external_id", "page-flight-" + i);
+                mvc.perform(post("/transactions")
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content(mapper.writeValueAsString(copy)))
+                        .andExpect(status().isCreated());
+            }
+
+            mvc.perform(get("/transactions"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.items", hasSize(50)))
+                    .andExpect(jsonPath("$.limit").value(50))
+                    .andExpect(jsonPath("$.offset").value(0))
+                    .andExpect(jsonPath("$.has_more").value(true));
+
+            mvc.perform(get("/transactions").param("limit", "100"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.items", hasSize(count)))
+                    .andExpect(jsonPath("$.has_more").value(false));
+
+            mvc.perform(get("/transactions").param("limit", "10").param("offset", "50"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.items", hasSize(count - 50)))
+                    .andExpect(jsonPath("$.offset").value(50))
+                    .andExpect(jsonPath("$.has_more").value(false));
+
+            mvc.perform(get("/transactions").param("limit", "10").param("offset", "1000"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.items", hasSize(0)))
+                    .andExpect(jsonPath("$.has_more").value(false));
+        }
+
+        @Test
+        void hasMoreTrueWhenExactlyOneMoreRowExists() throws Exception {
+            JsonNode seeds = mapper.readTree(
+                    getClass().getResourceAsStream("/fixtures/seed-payloads.json"));
+            JsonNode base = seeds.get("flight");
+            for (int i = 0; i < 3; i++) {
+                ObjectNode copy = ((ObjectNode) base.deepCopy())
+                        .put("external_id", "hm-flight-" + i);
+                mvc.perform(post("/transactions")
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content(mapper.writeValueAsString(copy)))
+                        .andExpect(status().isCreated());
+            }
+
+            mvc.perform(get("/transactions").param("limit", "2"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.items", hasSize(2)))
+                    .andExpect(jsonPath("$.has_more").value(true));
+
+            mvc.perform(get("/transactions").param("limit", "3"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.items", hasSize(3)))
+                    .andExpect(jsonPath("$.has_more").value(false));
+        }
+
+        @Test
+        void limitAboveHundredRejectedWith400() throws Exception {
+            mvc.perform(get("/transactions").param("limit", "101"))
+                    .andExpect(status().isBadRequest());
+        }
+
+        @Test
+        void limitBelowOneRejectedWith400() throws Exception {
+            mvc.perform(get("/transactions").param("limit", "0"))
+                    .andExpect(status().isBadRequest());
         }
     }
 
