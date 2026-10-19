@@ -2,6 +2,13 @@
 
 Run against a locally started service (`./gradlew bootRun`, default port `8080`). Grouped by endpoint; each group covers happy path + the rejections worth eyeballing. Snippets using `jq` assume `jq` is installed; swap for raw bodies otherwise.
 
+## `GET /health`
+
+```bash
+curl -s localhost:8080/health
+# → {"status":"ok"}
+```
+
 ## `POST /transactions`
 
 ```bash
