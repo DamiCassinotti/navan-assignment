@@ -45,7 +45,8 @@ class InvoiceControllerIntegrationTests {
     static void props(DynamicPropertyRegistry registry) throws Exception {
         dbFile = Files.createTempFile("navan-invoice-it-", ".db");
         Files.deleteIfExists(dbFile);
-        registry.add("spring.datasource.url", () -> "jdbc:sqlite:" + dbFile.toAbsolutePath());
+        registry.add("spring.datasource.url", () -> "jdbc:sqlite:" + dbFile.toAbsolutePath()
+                + "?foreign_keys=on&journal_mode=WAL&busy_timeout=5000&synchronous=NORMAL");
     }
 
     @AfterAll

@@ -23,7 +23,9 @@ curl -i -X POST localhost:8080/transactions \
     "total":220.00,
     "tax_lines":[{"name":"Airport tax","amount":15.00}],
     "fee_lines":[{"name":"YQ","amount":25.00}],
-    "metadata":{"origin":"TXL","destination":"LHR","fare":180.0}
+    "metadata":{"origin":"TXL","destination":"LHR","fare":180.0,
+      "coupons":[{"flight_number":"BA982","from":"TXL","to":"LHR",
+                  "departure":"2026-03-11T07:00:00Z","arrival":"2026-03-11T08:20:00Z"}]}
   }'
 
 # Duplicate POST — same external_id → 200 OK, same id as the first; body is the ORIGINAL row
@@ -36,7 +38,7 @@ curl -i -X POST localhost:8080/transactions \
     "occurred_at":"2026-03-11T06:40:00Z",
     "total":999.99,
     "tax_lines":[],"fee_lines":[],
-    "metadata":{"origin":"TXL","destination":"LHR"}
+    "metadata":{"origin":"TXL","destination":"LHR","fare":180.0,"coupons":[]}
   }'
 
 # Hotel, rail, both navan_fee variants — straight from the fixtures
@@ -100,7 +102,9 @@ curl -i -X PATCH localhost:8080/transactions/$ID \
   -d '{
     "type":"flight","currency":"USD",
     "occurred_at":"2026-04-01T10:00:00Z","total":333.33,
-    "metadata":{"origin":"TXL","destination":"CDG"},
+    "metadata":{"origin":"TXL","destination":"CDG","fare":300.0,
+      "coupons":[{"flight_number":"AF123","from":"TXL","to":"CDG",
+                  "departure":"2026-04-01T10:00:00Z","arrival":"2026-04-01T11:30:00Z"}]},
     "tax_lines":[{"name":"VAT","rate":0.1,"amount":30.30}],
     "fee_lines":[{"name":"booking","amount":5.00}]
   }'
@@ -108,7 +112,7 @@ curl -i -X PATCH localhost:8080/transactions/$ID \
 # Unknown id — 404
 curl -i -X PATCH localhost:8080/transactions/00000000-0000-0000-0000-000000000000 \
   -H 'content-type: application/json' \
-  -d '{"type":"flight","currency":"EUR","occurred_at":"2026-03-11T06:40:00Z","total":10,"metadata":{"origin":"A","destination":"B"},"tax_lines":[],"fee_lines":[]}'
+  -d '{"type":"flight","currency":"EUR","occurred_at":"2026-03-11T06:40:00Z","total":10,"metadata":{"origin":"A","destination":"B","fare":10.0,"coupons":[]},"tax_lines":[],"fee_lines":[]}'
 
 # Bad metadata — 400, row unchanged
 curl -i -X PATCH localhost:8080/transactions/$ID \
@@ -254,7 +258,7 @@ Any transaction that currently has a row in `invoice_lines` can't be mutated or 
 # After POST /invoices with $FLIGHT, both of these are rejected:
 curl -i -X PATCH localhost:8080/transactions/$FLIGHT \
   -H 'content-type: application/json' \
-  -d '{"type":"flight","currency":"EUR","occurred_at":"2026-03-11T06:40:00Z","total":999.99,"metadata":{"origin":"TXL","destination":"LHR"},"tax_lines":[],"fee_lines":[]}'
+  -d '{"type":"flight","currency":"EUR","occurred_at":"2026-03-11T06:40:00Z","total":999.99,"metadata":{"origin":"TXL","destination":"LHR","fare":180.0,"coupons":[]},"tax_lines":[],"fee_lines":[]}'
 
 curl -i -X DELETE localhost:8080/transactions/$FLIGHT
 ```

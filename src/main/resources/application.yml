@@ -3,12 +3,11 @@ server:
 
 spring:
   datasource:
-    url: jdbc:sqlite:${NAVAN_DB_PATH:./data/navan.db}
+    url: jdbc:sqlite:${NAVAN_DB_PATH:./data/navan.db}?foreign_keys=on&journal_mode=WAL&busy_timeout=5000&synchronous=NORMAL
     driver-class-name: org.sqlite.JDBC
     hikari:
-      maximum-pool-size: 1
+      maximum-pool-size: 10
       pool-name: navan-sqlite
-      connection-init-sql: "PRAGMA foreign_keys = ON"
   sql:
     init:
       mode: always

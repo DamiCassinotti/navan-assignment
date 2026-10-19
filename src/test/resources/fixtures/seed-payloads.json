@@ -119,7 +119,16 @@
       "origin": "TXL",
       "destination": "LHR",
       "fare": 180.0,
-      "coupons": []
+      "coupons": [
+        {
+          "carrier": "BA",
+          "flight_number": "BA982",
+          "from": "TXL",
+          "to": "LHR",
+          "departure": "2026-03-11T07:00:00Z",
+          "arrival": "2026-03-11T08:20:00Z"
+        }
+      ]
     }
   }
 }

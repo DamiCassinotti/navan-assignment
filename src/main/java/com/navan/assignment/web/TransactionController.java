@@ -107,15 +107,31 @@ public class TransactionController {
 
     private static List<TaxLine> mapTaxes(List<TaxLineDto> taxLines) {
         if (taxLines == null) return List.of();
-        return taxLines.stream()
-                .map(tax -> new TaxLine(tax.name(), tax.rate(), tax.amount()))
-                .toList();
+        List<TaxLine> result = new java.util.ArrayList<>(taxLines.size());
+        for (int i = 0; i < taxLines.size(); i++) {
+            TaxLineDto tax = taxLines.get(i);
+            if (tax == null) throw new BadRequestException("tax_lines[" + i + "] must be an object");
+            if (!StringUtils.hasText(tax.name()))
+                throw new BadRequestException("tax_lines[" + i + "].name is required");
+            if (tax.amount() == null)
+                throw new BadRequestException("tax_lines[" + i + "].amount is required");
+            result.add(new TaxLine(tax.name(), tax.rate(), tax.amount()));
+        }
+        return result;
     }
 
     private static List<FeeLine> mapFees(List<FeeLineDto> feeLines) {
         if (feeLines == null) return List.of();
-        return feeLines.stream()
-                .map(fee -> new FeeLine(fee.name(), fee.amount()))
-                .toList();
+        List<FeeLine> result = new java.util.ArrayList<>(feeLines.size());
+        for (int i = 0; i < feeLines.size(); i++) {
+            FeeLineDto fee = feeLines.get(i);
+            if (fee == null) throw new BadRequestException("fee_lines[" + i + "] must be an object");
+            if (!StringUtils.hasText(fee.name()))
+                throw new BadRequestException("fee_lines[" + i + "].name is required");
+            if (fee.amount() == null)
+                throw new BadRequestException("fee_lines[" + i + "].amount is required");
+            result.add(new FeeLine(fee.name(), fee.amount()));
+        }
+        return result;
     }
 }

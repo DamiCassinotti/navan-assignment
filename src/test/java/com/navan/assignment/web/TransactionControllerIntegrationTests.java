@@ -48,7 +48,8 @@ class TransactionControllerIntegrationTests {
     static void props(DynamicPropertyRegistry registry) throws Exception {
         dbFile = Files.createTempFile("navan-it-", ".db");
         Files.deleteIfExists(dbFile);
-        registry.add("spring.datasource.url", () -> "jdbc:sqlite:" + dbFile.toAbsolutePath());
+        registry.add("spring.datasource.url", () -> "jdbc:sqlite:" + dbFile.toAbsolutePath()
+                + "?foreign_keys=on&journal_mode=WAL&busy_timeout=5000&synchronous=NORMAL");
     }
 
     @AfterAll
@@ -59,6 +60,16 @@ class TransactionControllerIntegrationTests {
     @Autowired MockMvc mvc;
     @Autowired ObjectMapper mapper;
     @Autowired DSLContext dsl;
+
+    private static final String FLIGHT_METADATA_LHR =
+            "{\"origin\":\"TXL\",\"destination\":\"LHR\",\"fare\":180.0,"
+          + "\"coupons\":[{\"flight_number\":\"BA982\",\"from\":\"TXL\",\"to\":\"LHR\","
+          + "\"departure\":\"2026-03-11T07:00:00Z\",\"arrival\":\"2026-03-11T08:20:00Z\"}]}";
+
+    private static final String FLIGHT_METADATA_CDG =
+            "{\"origin\":\"TXL\",\"destination\":\"CDG\",\"fare\":300.0,"
+          + "\"coupons\":[{\"flight_number\":\"AF123\",\"from\":\"TXL\",\"to\":\"CDG\","
+          + "\"departure\":\"2026-04-01T10:00:00Z\",\"arrival\":\"2026-04-01T11:30:00Z\"}]}";
 
     @BeforeEach
     void clean() {
@@ -97,7 +108,7 @@ class TransactionControllerIntegrationTests {
                 JsonNode created = mapper.readTree(postResult.getResponse().getContentAsString());
                 String id = created.get("id").asText();
 
-                mvc.perform(get("/transactions/{id}", id))
+                var get = mvc.perform(get("/transactions/{id}", id))
                         .andExpect(status().isOk())
                         .andExpect(jsonPath("$.external_id").value(payload.get("external_id").asText()))
                         .andExpect(jsonPath("$.currency").value(payload.get("currency").asText()))
@@ -105,6 +116,28 @@ class TransactionControllerIntegrationTests {
                         .andExpect(jsonPath("$.metadata").exists())
                         .andExpect(jsonPath("$.tax_lines", hasSize(payload.get("tax_lines").size())))
                         .andExpect(jsonPath("$.fee_lines", hasSize(payload.get("fee_lines").size())));
+
+                switch (payload.get("type").asText()) {
+                    case "flight" -> get
+                            .andExpect(jsonPath("$.metadata.origin").value(payload.at("/metadata/origin").asText()))
+                            .andExpect(jsonPath("$.metadata.destination").value(payload.at("/metadata/destination").asText()))
+                            .andExpect(jsonPath("$.metadata.coupons", hasSize(payload.at("/metadata/coupons").size())))
+                            .andExpect(jsonPath("$.metadata.coupons[0].flight_number")
+                                    .value(payload.at("/metadata/coupons/0/flight_number").asText()));
+                    case "hotel" -> get
+                            .andExpect(jsonPath("$.metadata.name").value(payload.at("/metadata/name").asText()))
+                            .andExpect(jsonPath("$.metadata.address.street").value(payload.at("/metadata/address/street").asText()))
+                            .andExpect(jsonPath("$.metadata.address.city").value(payload.at("/metadata/address/city").asText()))
+                            .andExpect(jsonPath("$.metadata.address.country").value(payload.at("/metadata/address/country").asText()))
+                            .andExpect(jsonPath("$.metadata.nights").value(payload.at("/metadata/nights").asInt()));
+                    case "rail" -> get
+                            .andExpect(jsonPath("$.metadata.legs", hasSize(payload.at("/metadata/legs").size())))
+                            .andExpect(jsonPath("$.metadata.legs[0].origin").value(payload.at("/metadata/legs/0/origin").asText()))
+                            .andExpect(jsonPath("$.metadata.legs[0].destination").value(payload.at("/metadata/legs/0/destination").asText()));
+                    case "navan_fee" -> get
+                            .andExpect(jsonPath("$.metadata.fee_kind").value(payload.at("/metadata/fee_kind").asText()));
+                    default -> {}
+                }
             }
         }
     }
@@ -279,13 +312,11 @@ class TransactionControllerIntegrationTests {
                     .get("id").asText();
             String originalExternalId = seeds.get("flight").get("external_id").asText();
 
-            String patch = """
-                {"type":"flight","currency":"USD",
-                 "occurred_at":"2026-04-01T10:00:00Z","total":333.33,
-                 "metadata":{"origin":"TXL","destination":"CDG"},
-                 "tax_lines":[{"name":"VAT","rate":0.1,"amount":30.30}],
-                 "fee_lines":[{"name":"booking","amount":5.00}]}
-                """;
+            String patch = "{\"type\":\"flight\",\"currency\":\"USD\","
+                    + "\"occurred_at\":\"2026-04-01T10:00:00Z\",\"total\":333.33,"
+                    + "\"metadata\":" + FLIGHT_METADATA_CDG + ","
+                    + "\"tax_lines\":[{\"name\":\"VAT\",\"rate\":0.1,\"amount\":30.30}],"
+                    + "\"fee_lines\":[{\"name\":\"booking\",\"amount\":5.00}]}";
 
             mvc.perform(patch("/transactions/{id}", id)
                             .contentType(MediaType.APPLICATION_JSON).content(patch))
@@ -325,12 +356,10 @@ class TransactionControllerIntegrationTests {
             String id = mapper.readTree(created.getResponse().getContentAsString())
                     .get("id").asText();
 
-            String patch = """
-                {"type":"flight","currency":"EUR",
-                 "occurred_at":"2026-03-11T06:40:00Z","total":220.00,
-                 "metadata":{"origin":"TXL","destination":"LHR"},
-                 "tax_lines":[],"fee_lines":[]}
-                """;
+            String patch = "{\"type\":\"flight\",\"currency\":\"EUR\","
+                    + "\"occurred_at\":\"2026-03-11T06:40:00Z\",\"total\":220.00,"
+                    + "\"metadata\":" + FLIGHT_METADATA_LHR + ","
+                    + "\"tax_lines\":[],\"fee_lines\":[]}";
             mvc.perform(patch("/transactions/{id}", id)
                             .contentType(MediaType.APPLICATION_JSON).content(patch))
                     .andExpect(status().isOk())
@@ -343,12 +372,10 @@ class TransactionControllerIntegrationTests {
 
         @Test
         void patchUnknownIdReturns404() throws Exception {
-            String patch = """
-                {"type":"flight","currency":"EUR",
-                 "occurred_at":"2026-03-11T06:40:00Z","total":10,
-                 "metadata":{"origin":"A","destination":"B"},
-                 "tax_lines":[],"fee_lines":[]}
-                """;
+            String patch = "{\"type\":\"flight\",\"currency\":\"EUR\","
+                    + "\"occurred_at\":\"2026-03-11T06:40:00Z\",\"total\":10,"
+                    + "\"metadata\":" + FLIGHT_METADATA_LHR + ","
+                    + "\"tax_lines\":[],\"fee_lines\":[]}";
             mvc.perform(patch("/transactions/{id}", UUID.randomUUID())
                             .contentType(MediaType.APPLICATION_JSON).content(patch))
                     .andExpect(status().isNotFound());

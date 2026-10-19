@@ -25,6 +25,8 @@ The service does **not** pre-check `SELECT ... WHERE external_id = ?` before ins
 
 Instead, `POST /transactions` writes blind. If the unique index rejects the insert, jOOQ surfaces a `DataIntegrityViolationException`; the service catches it, selects the existing row by `external_id`, and returns **200 OK** with that row (the original — the duplicate payload is discarded). First writer wins, idempotent for the client, no app-level locking. The brief's concurrent-duplicate test (`ConcurrentDuplicateCreate`) exercises this with an `ExecutorService` + `CountDownLatch` and asserts exactly one row lands.
 
+**Note on the catch-and-select pattern vs Postgres.** On SQLite the violation surfaces at `execute()` time and the connection is left usable, so the follow-up `SELECT` by `external_id` just works. On Postgres the same pattern needs care: once a statement raises inside a transaction, the whole transaction block is aborted (`current transaction is aborted, commands ignored until end of transaction block`) and the follow-up SELECT fails. The portable rewrite is `INSERT ... ON CONFLICT (external_id) DO NOTHING RETURNING id`, then a SELECT by `external_id` only if the insert returned no row — or a savepoint around the insert. I didn't swap to `ON CONFLICT` here because the current catch is clear and SQLite handles it cleanly; it's flagged as the exact change to make alongside the `FOR UPDATE` fix if this moved to Postgres.
+
 ## Snapshot design
 
 Invoices are **frozen** at write time. A `PATCH /transactions/{id}` that lands after the invoice is created must not change the invoice's totals or line details. The schema reflects that:
@@ -87,6 +89,31 @@ SELECT id FROM transactions WHERE id = :txId FOR UPDATE;
 With both paths locking the same row before deciding, whichever transaction grabs the lock first forces the other to wait and re-read; the loser then sees the committed state (either T is gone, or an `invoice_lines` row exists) and takes the correct branch.
 
 I did **not** add `FOR UPDATE` to this build. SQLite doesn't honor it — the dialect accepts the clause but the engine's one-writer semantics already give us the same guarantee for free, so adding it would be cargo-culting. It's flagged here as the single-line change to make if this service were ever moved onto Postgres (or any other backend that allows concurrent writers to proceed past a check).
+
+## PATCH semantics: full replace, not partial
+
+`PATCH /transactions/{id}` and `PATCH /invoices/{id}` take the **same body shape as create** and replace the stored resource wholesale (header fields + tax/fee lines or transaction set). Sending `{ "total": 250 }` on its own returns 400 — the request must carry a complete representation.
+
+This is a deliberate choice over RFC 5789 merge-patch semantics:
+
+- The brief defines PATCH as "update stored fields… as you support" and leaves the shape open, so a full-replace is in-scope.
+- Tax/fee lines and the invoice line set are **collections**, not scalar fields. Partial-updating a collection would mean inventing a JSON-Patch-style operation vocabulary (add/remove/replace at specific indexes) or guessing when "`tax_lines: []`" means "clear" vs "no change". Full-replace sidesteps that ambiguity: whatever the body contains is what the resource is after the write.
+- Snapshot immutability (invoiced-check) is identical either way — the guard runs first and 409s regardless of body shape, so there's no interaction between PATCH-shape and the freeze guarantee.
+
+The trade-off: callers have to GET-then-PATCH if they want to touch one field. That's documented in `curls.md` with a worked example. The sharper HTTP-ism would be to expose this as `PUT`, keep `PATCH` for merge-patch, and add a separate scoped endpoint for the invoiced guard — not worth the surface area at this size.
+
+## Pool size and SQLite concurrency
+
+Hikari runs with `maximum-pool-size: 10` against a SQLite file opened in **WAL** mode (`journal_mode=WAL`), with `busy_timeout=5000ms` and `synchronous=NORMAL` set via JDBC URL params so they apply to every connection in the pool.
+
+The tradeoff behind these numbers:
+
+- **Why a pool at all.** With `maximum-pool-size: 1`, every request serializes at Hikari before it reaches SQLite. The 16-thread concurrent-create test then never actually races at the DB — it queues on the pool lock, and the DB-level unique-index guard is theoretical. Raising the pool makes that test meaningful: 16 clients really do contend inside SQLite, the unique index really does reject the duplicates, and the catch-and-return path really does run under contention.
+- **Why WAL.** In the default rollback-journal mode, SQLite blocks concurrent readers against a writer and rejects concurrent writers immediately with `SQLITE_BUSY`. A pool > 1 under those semantics means sporadic BUSY errors on any overlap. WAL lets readers and writers coexist, and only serializes writers against each other — exactly the shape of this workload.
+- **Why `busy_timeout=5000`.** When two writes do collide (both coming through the pool, both trying to append to the WAL), SQLite still only lets one writer commit at a time. `busy_timeout` tells the driver to retry transparently for up to 5 s instead of surfacing a `SQLITE_BUSY` the client has to handle. The invoice/transaction writes are small and committed quickly, so 5 s is a generous ceiling.
+- **Why 10, not higher.** SQLite's writer bottleneck is unchanged — more pool capacity past the point where readers already parallelize buys nothing but memory. 10 is enough headroom for the test suite + a handful of concurrent clients without pretending we have real multi-writer concurrency.
+
+If this moved to Postgres the pool sizing and WAL rationale go away: Postgres is natively multi-writer, and the right pool size is a function of CPU and I/O concurrency, not of journal mode.
 
 ## High-volume behavior
 

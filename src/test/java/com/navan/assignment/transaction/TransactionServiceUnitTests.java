@@ -31,6 +31,12 @@ class TransactionServiceUnitTests {
     private InvoiceRepository invoiceRepository;
     private TransactionService service;
 
+    private static final String VALID_FLIGHT_METADATA = """
+            {"origin":"TXL","destination":"LHR","fare":180.0,
+             "coupons":[{"flight_number":"BA982","from":"TXL","to":"LHR",
+                         "departure":"2026-03-11T07:00:00Z","arrival":"2026-03-11T08:20:00Z"}]}
+            """;
+
     @BeforeEach
     void setup() {
         transactionRepository = mock(TransactionRepository.class);
@@ -43,7 +49,7 @@ class TransactionServiceUnitTests {
 
         @Test
         void insertsAndReturnsCreated() throws Exception {
-            JsonNode metadata = mapper.readTree("{\"origin\":\"TXL\",\"destination\":\"LHR\"}");
+            JsonNode metadata = mapper.readTree(VALID_FLIGHT_METADATA);
             CreateTransactionResult result = service.create(
                     "ext-1", TransactionType.FLIGHT, "EUR",
                     Instant.parse("2026-03-11T06:40:00Z"),
@@ -72,7 +78,7 @@ class TransactionServiceUnitTests {
 
         @Test
         void returnsExistingOnUniqueViolation() throws Exception {
-            JsonNode metadata = mapper.readTree("{\"origin\":\"TXL\",\"destination\":\"LHR\"}");
+            JsonNode metadata = mapper.readTree(VALID_FLIGHT_METADATA);
             doThrow(new DataIntegrityViolationException("dup")).when(transactionRepository).insertHeader(any());
             Transaction existing = new Transaction(
                     UUID.randomUUID(), "ext-1", TransactionType.FLIGHT, "EUR",
@@ -91,7 +97,7 @@ class TransactionServiceUnitTests {
 
         @Test
         void rethrowsWhenRowCannotBeFoundAfterViolation() throws Exception {
-            JsonNode metadata = mapper.readTree("{\"origin\":\"TXL\",\"destination\":\"LHR\"}");
+            JsonNode metadata = mapper.readTree(VALID_FLIGHT_METADATA);
             doThrow(new DataIntegrityViolationException("dup")).when(transactionRepository).insertHeader(any());
             when(transactionRepository.findByExternalId(any())).thenReturn(Optional.empty());
 
@@ -107,7 +113,7 @@ class TransactionServiceUnitTests {
         @Test
         void atomicallyReplacesHeaderAndLines() throws Exception {
             UUID id = UUID.randomUUID();
-            JsonNode originalMetadata = mapper.readTree("{\"origin\":\"TXL\",\"destination\":\"LHR\"}");
+            JsonNode originalMetadata = mapper.readTree(VALID_FLIGHT_METADATA);
             Instant createdAt = Instant.parse("2026-03-11T06:40:00Z");
             Transaction existing = new Transaction(
                     id, "ext-1", TransactionType.FLIGHT, "EUR",
@@ -117,7 +123,7 @@ class TransactionServiceUnitTests {
                     createdAt, createdAt);
             when(transactionRepository.findById(id)).thenReturn(Optional.of(existing));
 
-            JsonNode newMetadata = mapper.readTree("{\"origin\":\"TXL\",\"destination\":\"CDG\"}");
+            JsonNode newMetadata = mapper.readTree(VALID_FLIGHT_METADATA.replace("LHR", "CDG"));
             Transaction result = service.update(
                     id, TransactionType.FLIGHT, "USD",
                     Instant.parse("2026-04-01T10:00:00Z"),
@@ -143,7 +149,7 @@ class TransactionServiceUnitTests {
         void throwsNotFoundWhenMissing() throws Exception {
             UUID id = UUID.randomUUID();
             when(transactionRepository.findById(id)).thenReturn(Optional.empty());
-            JsonNode metadata = mapper.readTree("{\"origin\":\"TXL\",\"destination\":\"LHR\"}");
+            JsonNode metadata = mapper.readTree(VALID_FLIGHT_METADATA);
 
             assertThrows(NotFoundException.class, () ->
                     service.update(id, TransactionType.FLIGHT, "EUR",
@@ -172,7 +178,7 @@ class TransactionServiceUnitTests {
                     List.of(), List.of(), now, now);
             when(transactionRepository.findById(id)).thenReturn(Optional.of(existing));
             when(invoiceRepository.findInvoiceIdForTransaction(id)).thenReturn(Optional.of(UUID.randomUUID()));
-            JsonNode metadata = mapper.readTree("{\"origin\":\"TXL\",\"destination\":\"LHR\"}");
+            JsonNode metadata = mapper.readTree(VALID_FLIGHT_METADATA);
 
             assertThrows(ConflictException.class, () ->
                     service.update(id, TransactionType.FLIGHT, "EUR",

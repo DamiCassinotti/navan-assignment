@@ -99,14 +99,21 @@ public class TransactionRepository {
     }
 
     public List<Transaction> findAll(int limit, int offset) {
-        List<Transaction> result = new ArrayList<>();
-        dsl.selectFrom(TRANSACTIONS)
+        List<UUID> ids = dsl.select(TRANSACTIONS.ID)
+                .from(TRANSACTIONS)
                 .orderBy(TRANSACTIONS.CREATED_AT.asc(), TRANSACTIONS.ID.asc())
                 .limit(limit)
                 .offset(offset)
-                .fetch()
-                .forEach(row -> result.add(hydrate(row)));
-        return result;
+                .fetch(TRANSACTIONS.ID);
+        if (ids.isEmpty()) return List.of();
+        Map<UUID, Transaction> byId = new LinkedHashMap<>();
+        for (Transaction tx : findAllByIds(ids)) byId.put(tx.id(), tx);
+        List<Transaction> ordered = new ArrayList<>(ids.size());
+        for (UUID id : ids) {
+            Transaction tx = byId.get(id);
+            if (tx != null) ordered.add(tx);
+        }
+        return ordered;
     }
 
     public List<Transaction> findAllByIds(Collection<UUID> ids) {

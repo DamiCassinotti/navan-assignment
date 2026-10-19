@@ -18,7 +18,10 @@ import com.navan.assignment.transaction.model.TransactionType;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.jooq.DSLContext;
@@ -51,7 +54,8 @@ public class InvoiceRepository {
     }
 
     public List<Invoice> findAll(int limit, int offset) {
-        List<Invoice> result = new ArrayList<>();
+        Map<UUID, Invoice> headers = new LinkedHashMap<>();
+        Map<UUID, List<InvoiceLine>> linesByInvoice = new HashMap<>();
         dsl.selectFrom(INVOICES)
                 .orderBy(INVOICES.CREATED_AT.asc(), INVOICES.ID.asc())
                 .limit(limit)
@@ -60,11 +64,8 @@ public class InvoiceRepository {
                 .forEach(row -> {
                     UUID id = row.get(INVOICES.ID);
                     List<InvoiceLine> lines = new ArrayList<>();
-                    dsl.selectFrom(INVOICE_LINES)
-                            .where(INVOICE_LINES.INVOICE_ID.eq(id))
-                            .fetch()
-                            .forEach(lineRow -> lines.add(hydrateLine(lineRow)));
-                    result.add(new Invoice(
+                    linesByInvoice.put(id, lines);
+                    headers.put(id, new Invoice(
                             id,
                             row.get(INVOICES.CURRENCY),
                             new BigDecimal(row.get(INVOICES.GRAND_TOTAL)),
@@ -74,7 +75,88 @@ public class InvoiceRepository {
                             Instant.parse(row.get(INVOICES.CREATED_AT))
                     ));
                 });
-        return result;
+        if (headers.isEmpty()) return List.of();
+
+        Map<UUID, UUID> lineToInvoice = new HashMap<>();
+        Map<UUID, InvoiceLineShell> lineShells = new LinkedHashMap<>();
+        dsl.selectFrom(INVOICE_LINES)
+                .where(INVOICE_LINES.INVOICE_ID.in(headers.keySet()))
+                .fetch()
+                .forEach(lineRow -> {
+                    UUID lineId = lineRow.get(INVOICE_LINES.ID);
+                    lineToInvoice.put(lineId, lineRow.get(INVOICE_LINES.INVOICE_ID));
+                    lineShells.put(lineId, new InvoiceLineShell(
+                            lineId,
+                            lineRow.get(INVOICE_LINES.TRANSACTION_ID),
+                            TransactionType.fromWire(lineRow.get(INVOICE_LINES.TYPE)),
+                            lineRow.get(INVOICE_LINES.CURRENCY),
+                            Instant.parse(lineRow.get(INVOICE_LINES.OCCURRED_AT)),
+                            new BigDecimal(lineRow.get(INVOICE_LINES.TOTAL)),
+                            readJson(lineRow.get(INVOICE_LINES.METADATA_SNAPSHOT)),
+                            new ArrayList<>(),
+                            new ArrayList<>()
+                    ));
+                });
+
+        if (!lineShells.isEmpty()) {
+            dsl.selectFrom(INVOICE_TAX_LINES)
+                    .where(INVOICE_TAX_LINES.INVOICE_LINE_ID.in(lineShells.keySet()))
+                    .fetch()
+                    .forEach(taxRow -> {
+                        InvoiceLineShell shell = lineShells.get(taxRow.get(INVOICE_TAX_LINES.INVOICE_LINE_ID));
+                        if (shell != null) shell.taxLines.add(new InvoiceTaxLine(
+                                taxRow.get(INVOICE_TAX_LINES.NAME),
+                                taxRow.get(INVOICE_TAX_LINES.RATE) == null ? null : new BigDecimal(taxRow.get(INVOICE_TAX_LINES.RATE)),
+                                new BigDecimal(taxRow.get(INVOICE_TAX_LINES.AMOUNT))
+                        ));
+                    });
+            dsl.selectFrom(INVOICE_FEE_LINES)
+                    .where(INVOICE_FEE_LINES.INVOICE_LINE_ID.in(lineShells.keySet()))
+                    .fetch()
+                    .forEach(feeRow -> {
+                        InvoiceLineShell shell = lineShells.get(feeRow.get(INVOICE_FEE_LINES.INVOICE_LINE_ID));
+                        if (shell != null) shell.feeLines.add(new InvoiceFeeLine(
+                                feeRow.get(INVOICE_FEE_LINES.NAME),
+                                new BigDecimal(feeRow.get(INVOICE_FEE_LINES.AMOUNT))
+                        ));
+                    });
+        }
+
+        for (InvoiceLineShell shell : lineShells.values()) {
+            UUID invoiceId = lineToInvoice.get(shell.id);
+            linesByInvoice.get(invoiceId).add(new InvoiceLine(
+                    shell.id, shell.transactionId, shell.type, shell.currency, shell.occurredAt,
+                    shell.total, shell.metadataSnapshot, shell.taxLines, shell.feeLines
+            ));
+        }
+
+        return new ArrayList<>(headers.values());
+    }
+
+    private static final class InvoiceLineShell {
+        final UUID id;
+        final UUID transactionId;
+        final TransactionType type;
+        final String currency;
+        final Instant occurredAt;
+        final BigDecimal total;
+        final JsonNode metadataSnapshot;
+        final List<InvoiceTaxLine> taxLines;
+        final List<InvoiceFeeLine> feeLines;
+
+        InvoiceLineShell(UUID id, UUID transactionId, TransactionType type, String currency,
+                         Instant occurredAt, BigDecimal total, JsonNode metadataSnapshot,
+                         List<InvoiceTaxLine> taxLines, List<InvoiceFeeLine> feeLines) {
+            this.id = id;
+            this.transactionId = transactionId;
+            this.type = type;
+            this.currency = currency;
+            this.occurredAt = occurredAt;
+            this.total = total;
+            this.metadataSnapshot = metadataSnapshot;
+            this.taxLines = taxLines;
+            this.feeLines = feeLines;
+        }
     }
 
     public void deleteSnapshotRows(UUID invoiceId) {

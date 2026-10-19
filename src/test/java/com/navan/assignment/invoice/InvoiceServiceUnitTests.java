@@ -93,6 +93,25 @@ class InvoiceServiceUnitTests {
     }
 
     @Test
+    void taxRollupMergesRatesWithDifferentScales() {
+        UUID a = UUID.randomUUID();
+        UUID b = UUID.randomUUID();
+        Transaction txA = tx(a, "EUR", new BigDecimal("100.00"),
+                List.of(new TaxLine("VAT", new BigDecimal("0.07"), new BigDecimal("7.00"))),
+                List.of());
+        Transaction txB = tx(b, "EUR", new BigDecimal("100.00"),
+                List.of(new TaxLine("VAT", new BigDecimal("0.070"), new BigDecimal("7.00"))),
+                List.of());
+        when(transactionRepository.findAllByIds(anyCollection())).thenReturn(List.of(txA, txB));
+
+        Invoice invoice = invoiceService.create(List.of(a, b));
+
+        assertThat(invoice.taxRollup()).hasSize(1);
+        assertThat(invoice.taxRollup().get(0).name()).isEqualTo("VAT");
+        assertThat(invoice.taxRollup().get(0).amount()).isEqualByComparingTo("14.00");
+    }
+
+    @Test
     void feeRollupSumsSameNameAcrossTransactions() {
         UUID a = UUID.randomUUID();
         UUID b = UUID.randomUUID();

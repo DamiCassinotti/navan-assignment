@@ -18,40 +18,111 @@ class MetadataValidatorUnitTests {
         return mapper.readTree(raw);
     }
 
+    private static final String VALID_FLIGHT = """
+            {
+              "origin":"TXL","destination":"LHR","fare":180.0,
+              "coupons":[{"flight_number":"BA982","from":"TXL","to":"LHR",
+                          "departure":"2026-03-11T07:00:00Z","arrival":"2026-03-11T08:20:00Z"}]
+            }
+            """;
+
+    private static final String VALID_HOTEL = """
+            {
+              "name":"X",
+              "address":{"street":"12 Kingsway","city":"London","country":"GB"},
+              "check_in":"2026-03-11","check_out":"2026-03-13",
+              "nights":2,"room_rate_per_night":140.0
+            }
+            """;
+
+    private static final String VALID_RAIL = """
+            {
+              "legs":[{"origin":"A","destination":"B",
+                       "departure":"2026-03-13T09:00:00Z","arrival":"2026-03-13T10:30:00Z"}]
+            }
+            """;
+
     @Nested
     class Flight {
         @Test
-        void acceptsOriginAndDestination() throws Exception {
-            validator.validate(TransactionType.FLIGHT, json("{\"origin\":\"TXL\",\"destination\":\"LHR\"}"));
+        void acceptsFullSpec() throws Exception {
+            validator.validate(TransactionType.FLIGHT, json(VALID_FLIGHT));
+        }
+
+        @Test
+        void acceptsEmptyCouponsArray() throws Exception {
+            validator.validate(TransactionType.FLIGHT, json("""
+                    {"origin":"TXL","destination":"LHR","fare":180.0,"coupons":[]}"""));
         }
 
         @Test
         void rejectsMissingOrigin() {
-            assertThrows(BadRequestException.class,
-                    () -> validator.validate(TransactionType.FLIGHT, json("{\"destination\":\"LHR\"}")));
+            assertThrows(BadRequestException.class, () -> validator.validate(TransactionType.FLIGHT, json("""
+                    {"destination":"LHR","fare":180.0,"coupons":[]}""")));
+        }
+
+        @Test
+        void rejectsMissingFare() {
+            assertThrows(BadRequestException.class, () -> validator.validate(TransactionType.FLIGHT, json("""
+                    {"origin":"TXL","destination":"LHR","coupons":[]}""")));
+        }
+
+        @Test
+        void rejectsMissingCouponsArray() {
+            assertThrows(BadRequestException.class, () -> validator.validate(TransactionType.FLIGHT, json("""
+                    {"origin":"TXL","destination":"LHR","fare":180.0}""")));
+        }
+
+        @Test
+        void rejectsCouponMissingFlightNumber() {
+            assertThrows(BadRequestException.class, () -> validator.validate(TransactionType.FLIGHT, json("""
+                    {"origin":"TXL","destination":"LHR","fare":180.0,
+                     "coupons":[{"from":"TXL","to":"LHR",
+                                 "departure":"2026-03-11T07:00:00Z","arrival":"2026-03-11T08:20:00Z"}]}""")));
         }
     }
 
     @Nested
     class Hotel {
         @Test
-        void acceptsRequiredFields() throws Exception {
-            validator.validate(TransactionType.HOTEL,
-                    json("{\"name\":\"X\",\"check_in\":\"2026-03-11\",\"check_out\":\"2026-03-13\"}"));
+        void acceptsFullSpec() throws Exception {
+            validator.validate(TransactionType.HOTEL, json(VALID_HOTEL));
         }
 
         @Test
-        void rejectsMissingCheckout() {
-            assertThrows(BadRequestException.class, () -> validator.validate(TransactionType.HOTEL,
-                    json("{\"name\":\"X\",\"check_in\":\"2026-03-11\"}")));
+        void rejectsMissingAddress() {
+            assertThrows(BadRequestException.class, () -> validator.validate(TransactionType.HOTEL, json("""
+                    {"name":"X","check_in":"2026-03-11","check_out":"2026-03-13",
+                     "nights":2,"room_rate_per_night":140.0}""")));
+        }
+
+        @Test
+        void rejectsAddressMissingCity() {
+            assertThrows(BadRequestException.class, () -> validator.validate(TransactionType.HOTEL, json("""
+                    {"name":"X","address":{"street":"12 Kingsway","country":"GB"},
+                     "check_in":"2026-03-11","check_out":"2026-03-13",
+                     "nights":2,"room_rate_per_night":140.0}""")));
+        }
+
+        @Test
+        void rejectsMissingNights() {
+            assertThrows(BadRequestException.class, () -> validator.validate(TransactionType.HOTEL, json("""
+                    {"name":"X","address":{"street":"s","city":"c","country":"GB"},
+                     "check_in":"2026-03-11","check_out":"2026-03-13","room_rate_per_night":140.0}""")));
         }
     }
 
     @Nested
     class Rail {
         @Test
-        void acceptsNonEmptyLegs() throws Exception {
-            validator.validate(TransactionType.RAIL, json("{\"legs\":[{\"origin\":\"A\"}]}"));
+        void acceptsLegsWithFullSpec() throws Exception {
+            validator.validate(TransactionType.RAIL, json(VALID_RAIL));
+        }
+
+        @Test
+        void rejectsLegMissingArrival() {
+            assertThrows(BadRequestException.class, () -> validator.validate(TransactionType.RAIL, json("""
+                    {"legs":[{"origin":"A","destination":"B","departure":"2026-03-13T09:00:00Z"}]}""")));
         }
 
         @Test

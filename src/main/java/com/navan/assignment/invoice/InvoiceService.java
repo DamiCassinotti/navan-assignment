@@ -146,7 +146,8 @@ public class InvoiceService {
         Map<Map.Entry<String, BigDecimal>, BigDecimal> acc = new LinkedHashMap<>();
         for (Transaction tx : transactions) {
             for (TaxLine line : tx.taxLines()) {
-                Map.Entry<String, BigDecimal> key = new AbstractMap.SimpleEntry<>(line.name(), line.rate());
+                BigDecimal rateKey = line.rate() == null ? null : line.rate().stripTrailingZeros();
+                Map.Entry<String, BigDecimal> key = new AbstractMap.SimpleEntry<>(line.name(), rateKey);
                 acc.merge(key, line.amount(), BigDecimal::add);
             }
         }
