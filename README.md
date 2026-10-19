@@ -21,6 +21,9 @@ Take-home: travel transactions + invoice service. See [`task-b-travel-inventory-
 
 - `POST /transactions` — create a transaction. `201` on insert, `200` on duplicate `external_id` (returns the existing row).
 - `GET /transactions/{id}` — fetch by id, `404` if missing.
+- `PATCH /transactions/{id}`, `DELETE /transactions/{id}`, `GET /transactions` (paginated).
+- `POST /invoices` — snapshot one or more transactions. Accepts `transaction_id` or `transaction_ids`; repeated ids collapse to one line. `404` if any id is missing, `409` on mixed currencies. Returns cached `tax_rollup` / `fee_rollup` / `grand_total`.
+- `GET /invoices/{id}` — fetch the snapshot and cached rollups, `404` if missing.
 
 ### curl
 

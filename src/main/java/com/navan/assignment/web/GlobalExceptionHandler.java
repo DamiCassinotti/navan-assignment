@@ -1,6 +1,7 @@
 package com.navan.assignment.web;
 
 import com.navan.assignment.common.errors.BadRequestException;
+import com.navan.assignment.common.errors.ConflictException;
 import com.navan.assignment.common.errors.NotFoundException;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
@@ -20,6 +21,11 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(NotFoundException.class)
     public ResponseEntity<Map<String, String>> notFound(NotFoundException exception) {
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", exception.getMessage()));
+    }
+
+    @ExceptionHandler(ConflictException.class)
+    public ResponseEntity<Map<String, String>> conflict(ConflictException exception) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", exception.getMessage()));
     }
 
     @ExceptionHandler(HttpMessageNotReadableException.class)

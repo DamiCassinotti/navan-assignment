@@ -135,3 +135,60 @@ curl -s 'localhost:8080/transactions?limit=10&offset=20' | jq
 # limit > 100 — expect 400
 curl -i 'localhost:8080/transactions?limit=1000'
 ```
+
+## `POST /invoices`
+
+Accepts either `transaction_id` (single) or `transaction_ids` (array). Repeated ids collapse to one snapshot line. Response is the full invoice: snapshot `lines`, cached `tax_rollup` / `fee_rollup`, and `grand_total`.
+
+```bash
+# Full trip invoice — 5 seeds → grand_total 685.70
+FLIGHT=$(curl -s -X POST localhost:8080/transactions -H 'content-type: application/json' \
+          -d "$(jq '.flight' fixtures/task-b/seed-payloads.json)" | jq -r .id)
+HOTEL=$(curl -s -X POST localhost:8080/transactions -H 'content-type: application/json' \
+         -d "$(jq '.hotel' fixtures/task-b/seed-payloads.json)" | jq -r .id)
+RAIL=$(curl -s -X POST localhost:8080/transactions -H 'content-type: application/json' \
+        -d "$(jq '.rail' fixtures/task-b/seed-payloads.json)" | jq -r .id)
+TRIP=$(curl -s -X POST localhost:8080/transactions -H 'content-type: application/json' \
+        -d "$(jq '.trip_fee' fixtures/task-b/seed-payloads.json)" | jq -r .id)
+CALL=$(curl -s -X POST localhost:8080/transactions -H 'content-type: application/json' \
+        -d "$(jq '.agent_call_fee' fixtures/task-b/seed-payloads.json)" | jq -r .id)
+
+INVOICE_ID=$(curl -s -X POST localhost:8080/invoices \
+  -H 'content-type: application/json' \
+  -d "{\"transaction_ids\":[\"$FLIGHT\",\"$HOTEL\",\"$RAIL\",\"$TRIP\",\"$CALL\"]}" | jq -r .id)
+
+# Single id — alternative form
+curl -i -X POST localhost:8080/invoices \
+  -H 'content-type: application/json' \
+  -d "{\"transaction_id\":\"$FLIGHT\"}"
+```
+
+### Rejections
+
+```bash
+# Missing transaction — 404
+curl -i -X POST localhost:8080/invoices \
+  -H 'content-type: application/json' \
+  -d '{"transaction_id":"00000000-0000-0000-0000-000000000000"}'
+
+# Mixed currencies — 409. Create a USD hotel transaction first, then invoice EUR + USD together.
+USD_HOTEL_ID=$(curl -s -X POST localhost:8080/transactions -H 'content-type: application/json' \
+  -d "$(jq '.hotel + {currency:"USD", external_id:"hotel-USD-mix"}' fixtures/task-b/seed-payloads.json)" \
+  | jq -r .id)
+
+curl -i -X POST localhost:8080/invoices \
+  -H 'content-type: application/json' \
+  -d "{\"transaction_ids\":[\"$FLIGHT\",\"$USD_HOTEL_ID\"]}"
+```
+
+## `GET /invoices/{id}`
+
+`INVOICE_ID` is set by the trip-invoice snippet above.
+
+```bash
+# Read back the cached rollups + snapshot lines
+curl -s localhost:8080/invoices/$INVOICE_ID | jq
+
+# Unknown id — 404
+curl -i localhost:8080/invoices/00000000-0000-0000-0000-000000000000
+```

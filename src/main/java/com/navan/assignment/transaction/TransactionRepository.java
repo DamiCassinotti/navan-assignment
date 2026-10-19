@@ -14,7 +14,11 @@ import com.navan.assignment.transaction.model.TransactionType;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -102,6 +106,60 @@ public class TransactionRepository {
                 .offset(offset)
                 .fetch()
                 .forEach(row -> result.add(hydrate(row)));
+        return result;
+    }
+
+    public List<Transaction> findAllByIds(Collection<UUID> ids) {
+        if (ids.isEmpty()) return List.of();
+
+        Map<UUID, Transaction> byId = new LinkedHashMap<>();
+        dsl.selectFrom(TRANSACTIONS)
+                .where(TRANSACTIONS.ID.in(ids))
+                .fetch()
+                .forEach(row -> {
+                    UUID id = row.get(TRANSACTIONS.ID);
+                    byId.put(id, new Transaction(
+                            id,
+                            row.get(TRANSACTIONS.EXTERNAL_ID),
+                            TransactionType.fromWire(row.get(TRANSACTIONS.TYPE)),
+                            row.get(TRANSACTIONS.CURRENCY),
+                            Instant.parse(row.get(TRANSACTIONS.OCCURRED_AT)),
+                            new BigDecimal(row.get(TRANSACTIONS.TOTAL)),
+                            readJson(row.get(TRANSACTIONS.METADATA)),
+                            new ArrayList<>(),
+                            new ArrayList<>(),
+                            Instant.parse(row.get(TRANSACTIONS.CREATED_AT)),
+                            Instant.parse(row.get(TRANSACTIONS.UPDATED_AT))
+                    ));
+                });
+
+        Map<UUID, List<TaxLine>> taxesByTx = new HashMap<>();
+        dsl.selectFrom(TAX_LINES)
+                .where(TAX_LINES.TRANSACTION_ID.in(byId.keySet()))
+                .fetch()
+                .forEach(row -> taxesByTx
+                        .computeIfAbsent(row.get(TAX_LINES.TRANSACTION_ID), k -> new ArrayList<>())
+                        .add(new TaxLine(
+                                row.get(TAX_LINES.NAME),
+                                row.get(TAX_LINES.RATE) == null ? null : new BigDecimal(row.get(TAX_LINES.RATE)),
+                                new BigDecimal(row.get(TAX_LINES.AMOUNT)))));
+
+        Map<UUID, List<FeeLine>> feesByTx = new HashMap<>();
+        dsl.selectFrom(FEE_LINES)
+                .where(FEE_LINES.TRANSACTION_ID.in(byId.keySet()))
+                .fetch()
+                .forEach(row -> feesByTx
+                        .computeIfAbsent(row.get(FEE_LINES.TRANSACTION_ID), k -> new ArrayList<>())
+                        .add(new FeeLine(
+                                row.get(FEE_LINES.NAME),
+                                new BigDecimal(row.get(FEE_LINES.AMOUNT)))));
+
+        List<Transaction> result = new ArrayList<>(byId.size());
+        for (Transaction tx : byId.values()) {
+            tx.taxLines().addAll(taxesByTx.getOrDefault(tx.id(), List.of()));
+            tx.feeLines().addAll(feesByTx.getOrDefault(tx.id(), List.of()));
+            result.add(tx);
+        }
         return result;
     }
 
