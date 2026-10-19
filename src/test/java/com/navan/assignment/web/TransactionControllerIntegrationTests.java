@@ -1,6 +1,8 @@
 package com.navan.assignment.web;
 
 import static org.hamcrest.Matchers.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
@@ -8,10 +10,20 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.jooq.DSLContext;
+import org.jooq.impl.DSL;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
@@ -113,6 +125,55 @@ class TransactionControllerIntegrationTests {
                             .contentType(MediaType.APPLICATION_JSON).content(duplicate))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.id").value(firstId));
+
+            int rowCount = dsl.fetchCount(
+                    DSL.table("transactions"),
+                    DSL.field("external_id").eq(
+                            seeds.get("flight").get("external_id").asText()));
+            assertEquals(1, rowCount);
+        }
+
+        @Test
+        void concurrentPostsCollapseToSingleRow() throws Exception {
+            JsonNode seeds = mapper.readTree(
+                    getClass().getResourceAsStream("/fixtures/seed-payloads.json"));
+            String flight = mapper.writeValueAsString(seeds.get("flight"));
+            String externalId = seeds.get("flight").get("external_id").asText();
+
+            int threads = 16;
+            ExecutorService pool = Executors.newFixedThreadPool(threads);
+            CountDownLatch ready = new CountDownLatch(threads);
+            CountDownLatch go = new CountDownLatch(1);
+            List<Future<String>> futures = new ArrayList<>();
+
+            for (int i = 0; i < threads; i++) {
+                futures.add(pool.submit(() -> {
+                    ready.countDown();
+                    go.await();
+                    MvcResult result = mvc.perform(post("/transactions")
+                                    .contentType(MediaType.APPLICATION_JSON).content(flight))
+                            .andReturn();
+                    int status = result.getResponse().getStatus();
+                    assertTrue(status == 200 || status == 201,
+                            "unexpected status " + status + ": " + result.getResponse().getContentAsString());
+                    return mapper.readTree(result.getResponse().getContentAsString()).get("id").asText();
+                }));
+            }
+
+            ready.await(5, TimeUnit.SECONDS);
+            go.countDown();
+
+            Set<String> ids = new HashSet<>();
+            for (Future<String> future : futures) ids.add(future.get(30, TimeUnit.SECONDS));
+            pool.shutdown();
+
+            assertEquals(1, ids.size(),
+                    "all concurrent POSTs should return the same id, got " + ids);
+
+            int rowCount = dsl.fetchCount(
+                    DSL.table("transactions"),
+                    DSL.field("external_id").eq(externalId));
+            assertEquals(1, rowCount);
         }
     }
 
